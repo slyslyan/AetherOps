@@ -1,0 +1,143 @@
+// AetherOps — gRPC service definitions
+// Communication protocol between Go data plane and Python cognitive plane
+
+syntax = "proto3";
+
+package aetherops;
+option go_package = "ebpf-autoheal/proto/gen;aetherops";
+
+// ─────────────────────────────────────────────
+// Go → Python: topology & anomaly streaming
+// ─────────────────────────────────────────────
+
+service TopologyService {
+  // GetTopology returns the current service graph snapshot.
+  rpc GetTopology (GetTopologyRequest) returns (TopologySnapshot);
+
+  // SubscribeAnomalyEvents streams anomaly events as they are detected.
+  // The Go side evaluates anomalies every AnalysisInterval (default 15s)
+  // and pushes events to all subscribed Python consumers.
+  rpc SubscribeAnomalyEvents (AnomalySubscription) returns (stream AnomalyEvent);
+}
+
+message GetTopologyRequest {
+  // If true, include edges with zero anomaly score.
+  bool include_healthy = 1;
+}
+
+message TopologySnapshot {
+  repeated TopologyNode nodes = 1;
+  repeated TopologyEdge edges = 2;
+  int64 timestamp_unix_nano = 3;
+  int32 node_count = 4;
+  int32 edge_count = 5;
+}
+
+message TopologyNode {
+  string id = 1;           // Service name or IP:Port
+  double avg_latency_ms = 2;
+  double error_rate = 3;
+  int64 call_count = 4;
+}
+
+message TopologyEdge {
+  string src = 1;
+  string dst = 2;
+  int64 call_count = 3;
+  double avg_latency_ms = 4;
+  double ema_latency_ms = 5;
+  double p95_latency_ms = 6;
+  double anomaly_score = 7;
+  double call_anomaly_score = 8;
+}
+
+message AnomalySubscription {
+  // Minimum anomaly score to report. Events below this threshold are filtered out.
+  double min_score_threshold = 1;
+}
+
+message AnomalyEvent {
+  string node_id = 1;
+  double anomaly_score = 2;
+  double avg_latency_ms = 3;
+  int64 call_count = 4;
+  repeated string suspect_chain = 5;       // Root cause chain from reverse random walk
+  int64 timestamp_unix_nano = 6;
+  double root_cause_score = 7;
+}
+
+// ─────────────────────────────────────────────
+// Python → Go: risk assessment & remediation
+// ─────────────────────────────────────────────
+
+service RemediationService {
+  // EvaluateRemediation simulates the blast radius of a proposed action.
+  rpc EvaluateRemediation (RemediationRequest) returns (RemediationReport);
+
+  // ExecuteRemediation executes a graded remediation action.
+  rpc ExecuteRemediation (ExecuteRequest) returns (ExecuteResponse);
+}
+
+message RemediationRequest {
+  string target_node = 1;
+  RemediationAction action = 2;
+  string context_json = 3;  // Optional: extra context from LLM diagnosis
+}
+
+enum RemediationAction {
+  UNKNOWN = 0;
+  TC_DROP = 1;             // Kernel-level packet drop (low risk)
+  POD_RESTART = 2;         // K8s pod restart (medium risk)
+  SCALE_UP = 3;            // Scale up deployment (low risk)
+  CONFIG_CHANGE = 4;       // Configuration change (high risk)
+  IMAGE_ROLLBACK = 5;      // Rollback to previous image (high risk)
+}
+
+message RemediationReport {
+  string target_node = 1;
+  RemediationAction action = 2;
+  RiskLevel risk_level = 3;
+
+  // Impact analysis
+  int32 affected_upstream_count = 4;
+  int32 affected_downstream_count = 5;
+  repeated string affected_services = 6;
+  double estimated_error_budget_consumption = 7;  // percentage (0-100)
+  double estimated_downtime_seconds = 8;
+
+  string recommendation = 9;
+}
+
+enum RiskLevel {
+  RISK_UNKNOWN = 0;
+  RISK_LOW = 1;      // Auto-execute: TC drop, scale up
+  RISK_MEDIUM = 2;   // TEE sandbox / audit log: pod restart
+  RISK_HIGH = 3;     // Requires approval: config change, rollback
+}
+
+message ExecuteRequest {
+  string target_node = 1;
+  RemediationAction action = 2;
+  bool force = 3;           // Skip risk check if true
+}
+
+message ExecuteResponse {
+  bool accepted = 1;
+  string execution_id = 2;
+  string status = 3;        // "executed", "pending_approval", "rejected", "simulated"
+  string details = 4;
+}
+
+// ─────────────────────────────────────────────
+// Go internal: topology sync to Neo4j
+// ─────────────────────────────────────────────
+
+service GraphDatabaseService {
+  // SyncTopology pushes the current topology snapshot to a graph database.
+  rpc SyncTopology (TopologySnapshot) returns (SyncAck);
+}
+
+message SyncAck {
+  bool success = 1;
+  string message = 2;
+}

@@ -1,0 +1,43 @@
+[
+  {
+    "id": "max-replica-restart",
+    "description": "Override: stricter replica change limit for production",
+    "effect": "deny",
+    "conditions": {
+      "actions": ["POD_RESTART", "SCALE_DOWN"],
+      "max_replicas_percent": 10
+    },
+    "priority": 100
+  },
+  {
+    "id": "protect-monitoring",
+    "description": "Never disrupt monitoring infrastructure",
+    "effect": "deny",
+    "conditions": {
+      "match_pattern": "(prometheus|grafana|alertmanager|jaeger|elasticsearch)",
+      "actions": ["TC_DROP", "POD_RESTART", "SCALE_DOWN", "CONFIG_CHANGE"]
+    },
+    "priority": 100
+  },
+  {
+    "id": "business-hours-freeze",
+    "description": "No risky operations during 10:00-16:00 weekdays",
+    "effect": "deny",
+    "conditions": {
+      "actions": ["CONFIG_CHANGE", "IMAGE_ROLLBACK", "SCALE_DOWN"],
+      "block_time_ranges": ["10:00-16:00"],
+      "block_days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    },
+    "priority": 90
+  },
+  {
+    "id": "scale-up-max-cap",
+    "description": "Never scale beyond 20 replicas per service",
+    "effect": "deny",
+    "conditions": {
+      "actions": ["SCALE_UP"],
+      "max_replicas": 20
+    },
+    "priority": 80
+  }
+]

@@ -1,0 +1,31 @@
+[tool.poetry]
+name = "aetherops"
+version = "0.1.0"
+description = "AetherOps — AI-driven intelligent operations agent"
+authors = ["AetherOps Team"]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+grpcio = "^1.81"
+grpcio-tools = "^1.81"
+protobuf = "^6.33"
+langgraph = "^0.4"
+langchain = "^0.3"
+langchain-openai = "^0.3"
+causal-learn = "^0.1"
+numpy = "^2.0"
+pandas = "^2.0"
+prometheus-api-client = "^0.5"
+pymilvus = "^2.5"
+dspy = "^2.6"
+pyyaml = "^6.0"
+httpx = "^0.28"
+pydantic = "^2.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0"
+black = "^24.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

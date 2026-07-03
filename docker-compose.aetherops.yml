@@ -1,0 +1,130 @@
+# AetherOps — Full Stack Docker Compose
+#
+# Includes:
+#   - ebpf-autoheal (Go data plane, runs only on Linux with eBPF)
+#   - aetherops-core (Python cognitive plane)
+#   - Neo4j (dependency graph storage)
+#   - Milvus (vector store for RAG)
+#   - Prometheus + Grafana (observability)
+#
+# Usage:
+#   docker compose -f docker-compose.aetherops.yml up -d
+#
+# Note: ebpf-autoheal requires Linux host with eBPF support.
+# On non-Linux hosts, start it separately with `sudo ./ebpf-local`.
+
+version: "3.8"
+
+services:
+  # ── AetherOps Python Core ──
+  aetherops-core:
+    build:
+      context: ./aetherops
+      dockerfile: Dockerfile
+    container_name: aetherops-core
+    ports:
+      - "9091:9091"  # health check
+    environment:
+      - AETHEROPS_GRPC_ADDR=host.docker.internal:50051
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_API_URL=${LLM_API_URL:-https://api.openai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-claude-sonnet-4-6}
+      - PROMETHEUS_URL=http://prometheus:9090
+      - MILVUS_URI=http://milvus:19530
+      - LOG_LEVEL=INFO
+    depends_on:
+      - milvus
+    restart: unless-stopped
+    command: ["python", "-m", "aetherops.main", "--daemon"]
+
+  # ── Neo4j (Dependency Graph) ──
+  neo4j:
+    image: neo4j:5-community
+    container_name: aetherops-neo4j
+    ports:
+      - "7474:7474"   # HTTP (Browser UI)
+      - "7687:7687"   # Bolt protocol
+    environment:
+      - NEO4J_AUTH=neo4j/aetherops
+      - NEO4J_PLUGINS='["apoc"]'
+    volumes:
+      - neo4j-data:/data
+    restart: unless-stopped
+
+  # ── Milvus (Vector Store for RAG) ──
+  milvus:
+    image: milvusdb/milvus:v2.5.0
+    container_name: aetherops-milvus
+    ports:
+      - "19530:19530"  # gRPC
+      - "9092:9092"    # HTTP
+    environment:
+      - ETCD_ENDPOINTS=etcd:2379
+      - MINIO_ADDRESS=minio:9000
+    depends_on:
+      - etcd
+      - minio
+    restart: unless-stopped
+
+  etcd:
+    image: quay.io/coreos/etcd:v3.5
+    container_name: aetherops-etcd
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=5000
+    command:
+      - etcd
+      - --advertise-client-urls=http://0.0.0.0:2379
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --data-dir=/etcd
+
+  minio:
+    image: minio/minio:latest
+    container_name: aetherops-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+
+  # ── Prometheus ──
+  prometheus:
+    image: prom/prometheus:v3
+    container_name: aetherops-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=7d"
+    restart: unless-stopped
+
+  # ── Grafana ──
+  grafana:
+    image: grafana/grafana:latest
+    container_name: aetherops-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=aetherops
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  neo4j-data:
+  minio-data:
+  prometheus-data:
+  grafana-data:

@@ -529,5 +529,119 @@ ebpf-autoheal/
 
 ---
 
-> **最后更新**: 2026-05-28  
-> **项目状态**: 第七阶段完成 — 工程化重构、eBPF TC、HTTP/gRPC 协议解析、连接跟踪、cgroup 解析、配置系统、单元测试全部完成，全功能闭环验证通过，具备极强面试竞争力。
+---
+
+## 13. 第八阶段：AetherOps — AI 驱动智能运维 Agent
+
+### 13.1 升级目标
+在 ebpf-autoheal 的"感知 + 简单自愈"基础上，构建四层闭环 AIOps 系统：
+
+| 层 | 技术 | 说明 |
+|----|------|------|
+| **感知层** | 已有 eBPF + Go | 不变 |
+| **认知层** | Python + causal-learn + LLM + LangGraph | 因果推断 + 多模态 LLM 诊断 + 认知工作流编排 |
+| **安全执行层** | Go Blast Radius + 分级自愈 | 影响面评估 + 低/中/高三级策略 |
+| **进化层** | Milvus RAG + DSPy | 历史案例向量检索 + 自动 Prompt 优化 |
+
+### 13.2 新增文件结构
+
+```
+ebpf-autoheal/
+├── proto/aetherops.proto          # gRPC 服务定义
+├── proto/gen/                     # 生成的 Go protobuf 代码
+│
+├── cmd/tracer/
+│   ├── grpc_server.go             # ★ gRPC 服务端（Topology + Remediation）
+│   ├── blast_radius.go            # ★ Blast Radius 模拟 + 分级执行
+│   └── main.go (已修改)           # 新增 gRPC 启动和事件发布
+│
+├── aetherops/                     # ★ Python 认知核心（新增）
+│   ├── pyproject.toml             # Poetry 项目定义
+│   ├── Dockerfile                 # 容器构建
+│   ├── workflow.yaml              # LangGraph 工作流配置
+│   ├── main.py                    # 入口（daemon / single workflow）
+│   ├── core/
+│   │   ├── grpc_client.py        # Go 数据面 gRPC 客户端
+│   │   ├── causal_inference.py   # causal-learn 因果发现（LPCMCI/PC/LiNGAM）
+│   │   ├── llm_diagnosis.py      # 多模态 LLM 诊断 Agent
+│   │   ├── metrics_fetcher.py    # Prometheus 指标拉取
+│   │   └── risk_client.py        # 风险评估调用
+│   ├── workflows/
+│   │   └── langgraph_workflow.py # LangGraph 认知工作流编排
+│   ├── rag/
+│   │   ├── store.py              # Milvus 向量存储
+│   │   └── retriever.py          # 历史案例检索 + 上下文注入
+│   └── dspy/
+│       └── optimizer.py          # DSPy Prompt 自动优化
+│
+├── deploy/
+│   ├── aetherops-core.yaml       # K3s Deployment: Python core
+│   ├── aetherops-neo4j.yaml      # K3s Deployment: Neo4j
+│   ├── aetherops-milvus.yaml     # K3s Deployment: Milvus + etcd + minio
+│   └── aetherops-install.sh      # 一键部署脚本
+│
+└── docker-compose.aetherops.yml  # 完整 Docker Compose
+```
+
+### 13.3 gRPC 通信协议
+
+Python 认知层 ↔ Go 数据层通过 gRPC + Protobuf 通信：
+
+| 方法 | 方向 | 说明 |
+|------|------|------|
+| `GetTopology` | Go → Python | 返回当前 ServiceGraph 快照 |
+| `SubscribeAnomalyEvents` | Go → Python (stream) | 流式推送异常事件 |
+| `EvaluateRemediation` | Python → Go | 评估修复操作的爆炸半径 |
+| `ExecuteRemediation` | Python → Go | 执行分级修复操作 |
+
+### 13.4 LangGraph 认知工作流
+
+```
+Anomaly Event
+    │
+    ▼
+fetch_topology ───► fetch_metrics ───► causal_inference
+                                           │
+                                           ▼
+                                    llm_diagnosis
+                                      │      │
+                           confidence < 0.6  │ confidence >= 0.6
+                                  │          │
+                        (re-analyze loop)    ▼
+                                      risk_assessment
+                                           │
+                                           ▼
+                                    execute_remediation
+                                           │
+                                           ▼
+                                    store_to_rag ──► dspy_optimize
+```
+
+### 13.5 分级自愈策略
+
+| 风险等级 | 操作示例 | 执行方式 | 类比 |
+|----------|---------|---------|------|
+| **LOW** | TC 限流、Scale Up | 自动执行 | 堵住漏水口 |
+| **MEDIUM** | Pod 重启 | TEE 沙盒模拟 + 审计日志 | 在实验室做手术 |
+| **HIGH** | 配置变更、镜像回滚 | 生成 GitOps PR，等待审批 | 需要家属签字 |
+
+### 13.6 启动方式
+
+```bash
+# 1. Go 数据面（已有）
+sudo SIMULATE_LATENCY=1 ./ebpf-local
+
+# 2. Python 认知层
+cd aetherops && poetry install && LLM_API_KEY=sk-xxx python -m aetherops.main --daemon
+
+# 3. 或者用 Docker Compose 完整启动
+docker compose -f docker-compose.aetherops.yml up -d
+
+# 4. 在 K3s 上部署
+bash deploy/aetherops-install.sh
+```
+
+---
+
+> **最后更新**: 2026-06-30  
+> **项目状态**: 第八阶段完成 — AetherOps AI 智能运维 Agent 架构设计实现，涵盖因果推断、LLM 诊断、LangGraph 编排、Blast Radius、分级自愈、RAG 知识库、DSPy Prompt 优化，完整四层 AIOps 闭环。
