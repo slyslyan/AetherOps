@@ -9,8 +9,6 @@
 
 **eBPF-AutoHeal** is an eBPF-based zero-instrumentation microservice observability and auto-healing platform. It captures all TCP communication at the kernel level without any code modification, builds real-time call topology, pinpoints root causes using **adaptive thresholds, multi-dimensional anomaly scoring, and reverse random walk (PageRank)**. It then triggers kernel-level circuit breaking, Kubernetes Pod isolation/restart, collects CPU/memory flame graphs, goroutine/thread dumps, and packet captures at the failure scene, and finally sends alerts via Feishu/DingTalk webhooks — completing the full SRE closed-loop: **detect → diagnose → heal → preserve → notify**.
 
-> 🇨🇳 中文文档：[项目日志](project-log.md) ｜ [演示与测试指南](testing.md) ｜ [项目简介](PROJECT_INTRO.md) ｜ [面试学习指南](STUDY_GUIDE.md) ｜ [AetherOps 认知平面完全指南](AETHEROPS_GUIDE.md) ｜ [面试问答准备](qs.md)
-
 ## Core Features
 - **Zero-instrumentation capture**: Uses eBPF kprobe on `tcp_sendmsg` to automatically extract source/dest IP, port, latency (ns), process name (IPv4/IPv6 dual-stack)
 - **Connection lifetime tracking**: eBPF kprobe on `tcp_connect` + `tcp_close` to measure real connection duration (RTT)
@@ -170,14 +168,7 @@ ebpf-autoheal/
 ├── Dockerfile.agent             # Container build file
 ├── go.mod / go.sum
 ├── pprof-demo.go                # Local pprof test service
-├── README.md
-├── PROJECT_INTRO.md             # 项目简介（技术栈 + 核心功能）
-├── STUDY_GUIDE.md               # 面试学习指南（算法详解 + 面试问答）
-├── project-log.md               # 详细项目开发日志（中文）
-├── qs.md                        # 面试问答准备（30 题）
-├── 1.md                         # 面试优化建议
-├── weilai.md                    # 未来扩展方向
-└── testing.md                   # 演示与测试指南（中文）
+└── README.md
 ```
 
 ## Tech Stack
@@ -189,13 +180,6 @@ ebpf-autoheal/
 | **Algorithms** | EMA (exponential moving average), sliding window P95, reverse random walk (PageRank), Jaccard similarity, Top-K clustering |
 | **Deployment** | Docker, Kubernetes DaemonSet, hostNetwork/hostPID |
 | **Notifications** | Feishu / DingTalk webhook |
-
-## Interview Highlights
-- Full zero-instrumentation: no SDK, no sidecar, no code changes
-- IPv6 dual-stack handling, memory alignment, endianness — real kernel development issues
-- Adaptive thresholds prevent false positives on normally-high-latency paths while detecting subtle faults like call-volume drops
-- Graph algorithms + clustering + history learning — a tier above simple threshold-based detection
-- Complete SRE closed-loop from kernel capture to IM alert
 
 ## Future Roadmap
 - [ ] Feishu image message (upload flame graph PNG)
