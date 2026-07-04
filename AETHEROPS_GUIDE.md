@@ -133,7 +133,7 @@
 
 ## 3. Go 数据平面（eBPF）快速回顾
 
-> 详细内容请参考 `STUDY_GUIDE.md`，这里只做面试关键点总结。
+> 以下为面试关键点总结，详细原理可参考内核文档或 eBPF 相关书籍。
 
 ### 3.1 eBPF 探针
 
@@ -182,30 +182,54 @@
 ```
 aetherops/
 ├── __init__.py
-├── main.py                       # 守护进程入口
+├── main.py                       # 守护进程入口（MCP/gRPC 双通道）
 ├── demo.py                       # 3 分钟演示脚本
-├── workflow.yaml                 # 工作流配置（agent 定义 + 路由条件）
+├── dashboard.py                  # Streamlit 可视化仪表盘
+├── workflow.yaml                 # 工作流配置
 │
 ├── core/
-│   ├── mcp_client.py             # ★ MCP 客户端（两个工具的核心）
-│   ├── risk_client.py            # 风险客户端（MCP/gRPC 双通道）
-│   ├── llm_diagnosis.py          # ★ LLM 诊断（DeepSeek V4 Flash）
-│   └── screenshot_utils.py       # Grafana 截图工具
+│   ├── mcp_client.py             # ★ MCP 客户端（与 Go 数据面通信）
+│   ├── llm_diagnosis.py          # ★ LLM 诊断（5 种故障模式）
+│   ├── multi_turn_diagnosis.py   # 多轮诊断（LLM 可请求更多数据）
+│   ├── causal_inference.py       # LPCMCI 因果发现
+│   ├── alert_correlation.py      # 告警关联与去重
+│   ├── feedback.py               # 反馈循环与审计日志
+│   ├── socratic_debugger.py      # 苏格拉底式引导调试
+│   ├── risk_client.py            # 风险评估客户端
+│   ├── metrics_fetcher.py        # Prometheus 指标采集
+│   └── grpc_client.py            # gRPC 客户端（备选通信）
 │
 ├── workflows/
 │   └── langgraph_workflow.py     # ★ Supervisor + 5 Agent 工作流
 │
-└── memory/                       # RAG 知识库（Milvus 向量存储）
-    └── ...
+├── rag/
+│   ├── retriever.py              # RAG 检索器
+│   └── store.py                  # Milvus 向量存储管理
+│
+├── chaos/
+│   └── engine.py                 # 混沌工程引擎
+│
+├── benchmark/
+│   ├── scenarios.py              # 30 个标注故障场景
+│   ├── evaluator.py              # 评测引擎
+│   └── run.py                    # 命令行入口
+│
+├── dspy/
+│   └── optimizer.py              # DSPy Prompt 优化
+│
+└── proto/
+    └── aetherops_pb2*.py         # 生成的 protobuf 代码
 ```
 
 ### 4.2 关键文件职责
 
 | 文件 | 重要性 | 职责 |
 |------|--------|------|
-| `mcp_client.py` | ⭐⭐⭐⭐⭐ | 与 Go 数据平面通信的桥梁 |
+| `mcp_client.py` | ⭐⭐⭐⭐⭐ | 与 Go 数据面通信的桥梁 |
 | `langgraph_workflow.py` | ⭐⭐⭐⭐⭐ | 整个认知平面的心脏 |
-| `llm_diagnosis.py` | ⭐⭐⭐⭐⭐ | 主管诊断决策 |
+| `llm_diagnosis.py` | ⭐⭐⭐⭐⭐ | LLM 诊断决策 |
+| `causal_inference.py` | ⭐⭐⭐⭐ | LPCMCI 因果发现 |
+| `alert_correlation.py` | ⭐⭐⭐⭐ | 告警关联去重 |
 | `demo.py` | ⭐⭐⭐⭐ | 演示 + 快速验证 |
 | `workflow.yaml` | ⭐⭐⭐ | 配置声明 |
 
@@ -1181,7 +1205,7 @@ All tests passed.
 
 ```bash
 # 3 分钟演示脚本
-cd /d/W/xm/ebpf-autoheal
+cd /home/sly/Downloads/xm/ebpf-autoheal
 python -m aetherops.demo
 ```
 
@@ -1278,11 +1302,11 @@ A：三层防护：
 
 **Q14: eBPF 为什么安全？和内核模块比呢？**
 
-A：（参考 STUDY_GUIDE.md 第 9 章）内核模块有问题会让整个系统崩溃。eBPF 有内核验证器：检查有界循环、检查指针边界、限制指令数量（100 万条）。一个 eBPF 程序最多导致内核返回错误，不会导致内核 panic。
+A：内核模块有问题会让整个系统崩溃。eBPF 有内核验证器：检查有界循环、检查指针边界、限制指令数量（100 万条）。一个 eBPF 程序最多导致内核返回错误，不会导致内核 panic。
 
 **Q15: 字节序问题怎么处理的？**
 
-A：（参考 STUDY_GUIDE.md 第 8 章）eBPF 读取的 IP 是网络字节序（大端），Go 端用 `binary.LittleEndian` 读取 Ring Buffer。如果不匹配，`192.168.49.2` 会显示为 `2.49.168.192`。这是 eBPF 开发中的经典坑。
+A：eBPF 读取的 IP 是网络字节序（大端），Go 端用 `binary.LittleEndian` 读取 Ring Buffer。如果不匹配，`192.168.49.2` 会显示为 `2.49.168.192`。这是 eBPF 开发中的经典坑。
 
 **Q16: 自适应阈值是怎么做的？**
 
@@ -1381,11 +1405,18 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 | `cmd/tracer/analysis.go` | 异常评分 + 反向随机游走 + 故障聚类 + 历史匹配 |
 | `cmd/tracer/mitigation.go` | TC 丢包 → K8s 重启 → 火焰图 → 飞书通知 |
 | `cmd/tracer/mcp_server.go` | MCP 服务器（JSON-RPC 2.0 over SSE），暴露工具 + 推送事件 |
+| `cmd/tracer/policy_engine.go` | OPA 风格策略引擎，自愈动作的安全防护 |
+| `cmd/tracer/blast_radius.go` | 爆炸半径评估 + 分级自愈执行 |
+| `cmd/tracer/grpc_server.go` | gRPC 服务（拓扑查询 + 异常事件流） |
 | `aetherops/core/mcp_client.py` | MCP 客户端，调用 Go 端的 topology/remediation 工具 |
 | `aetherops/core/llm_diagnosis.py` | LLM 诊断（5 种故障模式），回退到启发式算法 |
 | `aetherops/core/multi_turn_diagnosis.py` | 多轮诊断：LLM 可请求更多数据，3 轮内提升置信度 |
+| `aetherops/core/causal_inference.py` | LPCMCI 因果发现算法 |
+| `aetherops/core/socratic_debugger.py` | 苏格拉底式引导调试器 |
 | `aetherops/core/alert_correlation.py` | 三层告警关联：去重→因果分组→风暴抑制 |
 | `aetherops/core/feedback.py` | 反馈循环：审计日志、审批流程、RollbackAssistant |
+| `aetherops/core/metrics_fetcher.py` | Prometheus 指标采集 |
+| `aetherops/core/risk_client.py` | 风险评估客户端（MCP/gRPC 双通道） |
 | `aetherops/workflows/langgraph_workflow.py` | Supervisor + 5 Agent 工作流，状态驱动路由 |
 | `aetherops/benchmark/scenarios.py` | 30 个标注故障场景，覆盖 5 种模式 + 边界 |
 | `aetherops/benchmark/evaluator.py` | 评测引擎：跑场景 + 算准确率 + 生成报告 |
@@ -1393,6 +1424,9 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 | `aetherops/chaos/engine.py` | Chaos Engine：6 种故障注入，本地模拟 + K8s YAML |
 | `aetherops/dashboard.py` | Streamlit 仪表盘：7 页 Demo + 可视化 |
 | `aetherops/demo.py` | 3 分钟演示脚本，展示完整闭环 |
+| `aetherops/rag/retriever.py` | RAG 检索器，从 Milvus 查询相似历史故障 |
+| `aetherops/rag/store.py` | Milvus 向量存储管理 |
+| `aetherops/dspy/optimizer.py` | DSPy Prompt 优化 |
 | `oj/tests/aetherops_judgex_test.py` | 6 步集成测试，支持 live/demo 双模式 |
 
 ### 面试前快速复习

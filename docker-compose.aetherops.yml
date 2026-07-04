@@ -1,7 +1,10 @@
-# AetherOps — Full Stack Docker Compose
+# AetherOps — Cognitive Plane Docker Compose
+#
+# This compose file runs the AetherOps Python cognitive plane and its
+# data stores. The Go data plane (ebpf-autoheal) runs separately on
+# Linux hosts with eBPF support (see Project Structure).
 #
 # Includes:
-#   - ebpf-autoheal (Go data plane, runs only on Linux with eBPF)
 #   - aetherops-core (Python cognitive plane)
 #   - Neo4j (dependency graph storage)
 #   - Milvus (vector store for RAG)
@@ -10,7 +13,7 @@
 # Usage:
 #   docker compose -f docker-compose.aetherops.yml up -d
 #
-# Note: ebpf-autoheal requires Linux host with eBPF support.
+# Note: The Go eBPF data plane requires Linux host with eBPF support.
 # On non-Linux hosts, start it separately with `sudo ./ebpf-local`.
 
 version: "3.8"
@@ -28,7 +31,7 @@ services:
       - AETHEROPS_GRPC_ADDR=host.docker.internal:50051
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_API_URL=${LLM_API_URL:-https://api.openai.com/v1}
-      - LLM_MODEL=${LLM_MODEL:-claude-sonnet-4-6}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-v4-flash}
       - PROMETHEUS_URL=http://prometheus:9090
       - MILVUS_URI=http://milvus:19530
       - LOG_LEVEL=INFO
