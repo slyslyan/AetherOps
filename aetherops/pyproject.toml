@@ -21,9 +21,11 @@ dspy = "^2.6"
 pyyaml = "^6.0"
 httpx = "^0.28"
 pydantic = "^2.0"
+mcp = "^1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
+pytest-asyncio = "^0.25"
 black = "^24.0"
 
 [build-system]

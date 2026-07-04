@@ -53,40 +53,24 @@ class AetherOpsDaemon:
         with open(path) as f:
             return yaml.safe_load(f)
 
-    def start(self):
+    async def start(self):
         """Start listening for anomaly events via MCP SSE stream."""
         transport = os.getenv("AETHEROPS_TRANSPORT", "mcp")
         if transport == "grpc":
-            # gRPC fallback path
-            from aetherops.core.grpc_client import AetherOpsClient
-
-            grpc_addr = os.getenv("AETHEROPS_GRPC_ADDR", "localhost:50051")
-            self.client = AetherOpsClient(address=grpc_addr)
-            self.client.connect()
-            min_score = float(os.getenv("ANOMALY_MIN_SCORE", "0.5"))
-            logger.info("AetherOps daemon started (gRPC). Watching for anomalies (min_score=%.2f)...", min_score)
-            try:
-                for event in self.client.subscribe_anomalies(min_score=min_score):
-                    if not self.running:
-                        break
-                    self._handle_anomaly(event)
-            except KeyboardInterrupt:
-                pass
-            finally:
-                self.stop()
+            await self._start_grpc()
             return
 
         # MCP path — subscribe via SSE
         mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
         self.client = MCPClient(address=mcp_addr)
-        self.client.connect()
+        await self.client.connect()
         self.running = True
 
         min_score = float(os.getenv("ANOMALY_MIN_SCORE", "0.5"))
         logger.info("AetherOps daemon started (MCP/SSE). Watching for anomalies (min_score=%.2f)...", min_score)
 
         try:
-            for event in self.client.subscribe_anomalies(min_score=min_score):
+            async for event in self.client.subscribe_anomalies(min_score=min_score):
                 if not self.running:
                     break
                 logger.info(
@@ -94,13 +78,39 @@ class AetherOpsDaemon:
                     event.node_id,
                     event.anomaly_score,
                 )
+                # Run the sync handler in a thread to avoid blocking the event loop
+                await asyncio.to_thread(self._handle_anomaly, event)
+        except asyncio.CancelledError:
+            logger.info("Daemon cancelled")
+        except Exception:
+            logger.exception("Unexpected error in anomaly listener")
+        finally:
+            self.stop()
+
+    async def _start_grpc(self):
+        """gRPC fallback — legacy transport path."""
+        from aetherops.core.grpc_client import AetherOpsClient
+
+        grpc_addr = os.getenv("AETHEROPS_GRPC_ADDR", "localhost:50051")
+        self.client = AetherOpsClient(address=grpc_addr)
+        self.client.connect()
+        self.running = True
+
+        min_score = float(os.getenv("ANOMALY_MIN_SCORE", "0.5"))
+        logger.info("AetherOps daemon started (gRPC). Watching for anomalies (min_score=%.2f)...", min_score)
+
+        try:
+            for event in self.client.subscribe_anomalies(min_score=min_score):
+                if not self.running:
+                    break
                 self._handle_anomaly(event)
-        except KeyboardInterrupt:
-            logger.info("Shutting down...")
+        except asyncio.CancelledError:
+            pass
         finally:
             self.stop()
 
     def stop(self):
+        """Stop the daemon and close the client connection."""
         self.running = False
         if self.client:
             self.client.close()
@@ -226,6 +236,24 @@ def run_single_workflow():
     print("=======================\n")
 
 
+async def _run_daemon():
+    """Async entry point for daemon mode."""
+    daemon = AetherOpsDaemon()
+
+    def shutdown():
+        daemon.stop()
+
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, shutdown)
+        except NotImplementedError:
+            # Windows or non-main-thread — fall back to KeyboardInterrupt
+            pass
+
+    await daemon.start()
+
+
 def main():
     parser = argparse.ArgumentParser(description="AetherOps — Intelligent Operations Agent")
     parser.add_argument("--daemon", action="store_true", help="Run as daemon, listen for anomalies")
@@ -233,8 +261,10 @@ def main():
     args = parser.parse_args()
 
     if args.daemon:
-        daemon = AetherOpsDaemon()
-        daemon.start()
+        try:
+            asyncio.run(_run_daemon())
+        except KeyboardInterrupt:
+            logger.info("Shutdown by user")
     elif args.workflow:
         run_single_workflow()
     else:

@@ -139,6 +139,21 @@ docker compose -f docker-compose.aetherops.yml up -d
 - Milvus + Etcd + MinIO（RAG 向量存储）
 - Prometheus + Grafana（可观测性）
 
+### 配置参数（环境变量）
+
+关键调优参数，全部通过环境变量设置：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `CFG_P95_MULTIPLIER` | 1.2 | 异常延迟阈值 = P95 × 此倍数 |
+| `CFG_MIN_LAT_MS` | 10 | 最小延迟阈值(ms)，防止噪声误报 |
+| `CFG_CALL_QPS_DROP_RATIO` | 0.3 | QPS 降至基线此比例时触发异常 |
+| `CFG_CALL_ANOMALY_WEIGHT` | 2.0 | 调用量异常在综合分数中的权重 |
+| `CFG_ANALYSIS_INTERVAL` | 15 | 分析间隔(秒) |
+| `CFG_MITIGATION_COOLDOWN_SEC` | 120 | 同一节点自愈冷却时间(秒) |
+| `CFG_PROFILE_DURATION` | 10 | pprof 火焰图采集时长(秒) |
+| `CFG_MAX_SUSPECTS` | 5 | 根因分析最大嫌疑节点数 |
+
 ## 项目结构
 
 ```
@@ -252,9 +267,9 @@ docker compose -f docker-compose.aetherops.yml up -d
 
 | 文档 | 说明 |
 |------|------|
-| [AetherOps 完整指南](AETHEROPS_GUIDE.md) | 架构详解、面试指南、测试手册 |
-| [测试指南](testing.md) | 本地功能完整测试步骤 |
-| [项目简介](PROJECT_INTRO.md) | 项目快速概览 |
+| [AetherOps 完整指南](docs/AETHEROPS_GUIDE.md) | 架构详解、面试指南、测试手册 |
+| [测试指南](docs/testing.md) | 本地功能完整测试步骤 |
+| [项目简介](docs/PROJECT_INTRO.md) | 项目快速概览 |
 
 ## License
 

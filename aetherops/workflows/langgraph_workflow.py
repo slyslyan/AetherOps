@@ -23,7 +23,7 @@ import yaml
 from langgraph.graph import END, StateGraph
 
 from aetherops.core.causal_inference import run_causal_discovery
-from aetherops.core.mcp_client import MCPClient
+from aetherops.core.mcp_client import MCPClient, run_async
 from aetherops.core.llm_diagnosis import diagnose
 from aetherops.core.multi_turn_diagnosis import diagnose_multi_turn, DataRequest
 from aetherops.core.metrics_fetcher import fetch_recent_metrics
@@ -100,13 +100,14 @@ def topology_analyst(state: DiagnosisState) -> Dict:
             addr = os.getenv("AETHEROPS_GRPC_ADDR", "localhost:50051")
             client = AetherOpsClient(address=addr)
             client.connect()
+            snapshot = client.get_topology(include_healthy=False)
+            client.close()
         else:
             mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
             client = MCPClient(address=mcp_addr)
-            client.connect()
-
-        snapshot = client.get_topology(include_healthy=False)
-        client.close()
+            run_async(client.connect())
+            snapshot = run_async(client.get_topology(include_healthy=False))
+            client.close()
         logger.info("TopologyAnalyst: fetched %d nodes, %d edges",
                      snapshot.node_count, snapshot.edge_count)
         return {
@@ -437,13 +438,14 @@ def _verify_recovery(
             addr = os.getenv("AETHEROPS_GRPC_ADDR", "localhost:50051")
             client: MCPClient = AetherOpsClient(address=addr)  # type: ignore
             client.connect()
+            snapshot = client.get_topology(include_healthy=False)
+            client.close()
         else:
             mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
             client = MCPClient(address=mcp_addr)
-            client.connect()
-
-        snapshot = client.get_topology(include_healthy=False)
-        client.close()
+            run_async(client.connect())
+            snapshot = run_async(client.get_topology(include_healthy=False))
+            client.close()
 
         # Find the target node in the post-remediation snapshot.
         post_anomaly = 0.0

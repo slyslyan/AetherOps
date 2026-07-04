@@ -3,16 +3,19 @@ AetherOps — Risk assessment and remediation client.
 
 Calls the Go blast_radius tools via MCP protocol (default) or gRPC (fallback).
 Controlled by AETHEROPS_TRANSPORT env var: "mcp" (default) or "grpc".
+
+All MCP operations use a sync→async bridge (run_async) since LangGraph workflow
+nodes are synchronous but the MCP SDK is fully async.  The bridge dispatches
+coroutines to a dedicated background event loop and blocks the calling thread.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from typing import Optional
 
-from aetherops.core.mcp_client import MCPClient
+from aetherops.core.mcp_client import MCPClient, run_async
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +36,7 @@ def _get_client() -> MCPClient:
         else:
             mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
             client = MCPClient(address=mcp_addr)
-            client.connect()
+            run_async(client.connect())
             _client = client
     return _client
 
@@ -56,7 +59,7 @@ def assess_remediation(
     """
     try:
         client = _get_client()
-        report = client.evaluate_remediation(target_node, action)
+        report = run_async(client.evaluate_remediation(target_node, action))
         logger.info(
             "Risk assessment: action=%s target=%s risk=%s budget=%.1f%%",
             action,
@@ -99,7 +102,7 @@ def execute_remediation(
     """
     try:
         client = _get_client()
-        result = client.execute_remediation(target_node, action, force=force)
+        result = run_async(client.execute_remediation(target_node, action, force=force))
         logger.info(
             "Remediation execution: action=%s target=%s status=%s id=%s",
             action,

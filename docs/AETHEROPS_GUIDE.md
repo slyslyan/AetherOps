@@ -148,11 +148,18 @@
 
 ```
 每条边 (src→dst) 的异常分数：
-  score = latRatio × errorFactor + callDropScore × 2.0
+  score = latRatio × errorFactor + callDropScore × CFG_CALL_ANOMALY_WEIGHT
 
-  latRatio = avgLat / max(P95×1.2, 10ms)   // 延迟比率
-  errorFactor = 1 + errors/count             // 错误放大
-  callDropScore = (EMA - currentQPS) / EMA   // 调用量骤降
+  latRatio = avgLat / max(P95 × CFG_P95_MULTIPLIER, CFG_MIN_LAT_MS)  // 延迟比率
+  errorFactor = 1 + errors/count                                       // 错误放大
+  callDropScore = (EMA - currentQPS) / EMA                             // 调用量骤降
+
+所有阈值通过环境变量调优（默认值）：
+  CFG_P95_MULTIPLIER=1.2      延迟倍数阈值（调低至 1.01 更敏感）
+  CFG_MIN_LAT_MS=10           最小延迟阈值（调至 0 关闭下限）
+  CFG_CALL_ANOMALY_WEIGHT=2.0 调用量异常权重
+  CFG_ANALYSIS_INTERVAL=15    分析间隔（秒）
+  CFG_MITIGATION_COOLDOWN_SEC=120 自愈冷却时间（秒）
 ```
 
 ### 3.3 反向随机游走
@@ -299,65 +306,93 @@ MCP（Model Context Protocol）是 Anthropic 推出的标准化 AI 工具协议�
 ```
 [Python 认知平面]                              [Go 数据平面]
 
-1. 连接建立:
-   GET /mcp  HTTP/1.1
+1. SSE 连接建立:
+   GET /sse  HTTP/1.1
    Accept: text/event-stream
               │
               ▼
    HTTP 200 OK
    Content-Type: text/event-stream
-   ← data: {"jsonrpc":"2.0","method":"initialized"}
+   ← event: endpoint
+     data: /message
+   
+   客户端收到 endpoint 事件 → 后续 JSON-RPC 发到 /message
 
 2. tools/list (获取可用工具):
-   → data: {"id":"1","jsonrpc":"2.0","method":"tools/list"}
+   POST /message
+   Content-Type: application/json
+   → {"jsonrpc":"2.0","id":"1","method":"tools/list"}
               │
               ▼
-   ← data: {"id":"1","result":{"tools":[
+   ← (via SSE) {"jsonrpc":"2.0","id":"1","result":{"tools":[
      {"name":"get_topology","description":"Get service topology graph"},
      {"name":"evaluate_remediation","description":"Evaluate blast radius"},
      {"name":"execute_remediation","description":"Execute remediation action"}
    ]}}
 
 3. tools/call get_topology (调用工具):
-   → data: {"id":"2","jsonrpc":"2.0","method":"tools/call",
+   POST /message
+   → {"jsonrpc":"2.0","id":"2","method":"tools/call",
      "params":{"name":"get_topology","arguments":{"include_healthy":true}}}
               │
               ▼
-   ← data: {"id":"2","result":{nodes: [...], edges: [...], ...}}
+   ← (via SSE) {"jsonrpc":"2.0","id":"2","result":{
+     "nodes": [...], "edges": [...], ...}}
 
-4. SSE 事件推送 (Go → Python, 实时异常):
-   ← event: anomaly
-     data: {"node_id":"service:8080","anomaly_score":87.5,...}
+4. SSE 异常推送 (Go → Python, 实时):
+   ← (via SSE) {"jsonrpc":"2.0",
+     "method":"notifications/events/anomaly",
+     "params":{"node_id":"service:8080","anomaly_score":87.5,...}}
 ```
+
+**重要提示**：MCP SDK 内部自动处理 SSE 连接和 endpoint 发现。Python 端只需调用 `sse_client(url)`，无需手动管理 HTTP 请求。详细流程图只用于理解协议原理，实际开发中 SDK 已封装。**SSH 隧道场景**：如果 Go 数据面部署在远程服务器，通过 `ssh -L 50052:localhost:50052 user@host` 建立隧道后，Python 端连接 `http://localhost:50052` 即可，流程与本地一致。
 
 ### 5.4 MCPClient 核心代码
 
+实际实现使用官方的 `mcp` Python SDK（`mcp >= 1.0`），通过 SSE 传输层连接：
+
 ```python
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+
 class MCPClient:
-    def __init__(self, address="http://localhost:50052"):
-        self.base_url = address
+    def __init__(self, address: str = "http://localhost:50052"):
+        self.address = address.rstrip("/")
+        self._sse_url = f"{self.address}/sse"  # SSE endpoint
+        self._session: Optional[ClientSession] = None
 
-    def connect(self):
-        # 建立 SSE 连接
-        self.sse_resp = httpx.get(f"{self.base_url}/mcp",
-            headers={"Accept": "text/event-stream"})
+    async def connect(self) -> None:
+        """Establish SSE connection and discover tools."""
+        self._sse_ctx = sse_client(self._sse_url)
+        read, write = await self._sse_ctx.__aenter__()
+        self._session = ClientSession(read, write)
+        await self._session.__aenter__()
+        await self._session.initialize()
 
-    def _call_tool(self, name: str, args: dict) -> dict:
-        # 发送 JSON-RPC 请求
-        payload = {
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {"name": name, "arguments": args}
-        }
-        resp = httpx.post(f"{self.base_url}/mcp", json=payload)
-        return resp.json()
+        # 自动发现工具
+        tools_result = await self._session.list_tools()
+        self._tools = [t.model_dump() for t in tools_result.tools]
 
-    def get_topology(self, include_healthy=True) -> TopologySnapshot:
-        return self._call_tool("get_topology", {"include_healthy": include_healthy})
+    async def get_topology(self, include_healthy: bool = False) -> dict:
+        """Fetch current service graph."""
+        return await self._call_tool("get_topology",
+            {"include_healthy": include_healthy})
 
-    def evaluate_remediation(self, target, action) -> dict:
-        return self._call_tool("evaluate_remediation", {"target": target, "action": action})
+    async def evaluate_remediation(self, target: str, action: str) -> dict:
+        """Evaluate blast radius."""
+        return await self._call_tool("evaluate_remediation",
+            {"target_node": target, "action": action})
 ```
+
+**同步→异步桥接**：由于 LangGraph 节点是同步函数，而 MCP SDK 全是异步的，通过 `run_async()` 将协程派发到后台事件循环：
+
+```python
+def run_async(coro):
+    loop = get_bg_loop()  # 持久后台线程事件循环
+    return asyncio.run_coroutine_threadsafe(coro, loop).result()
+```
+
+> **注意**：Python SDK `mcp>=1.0` 使用 `sse_client()` 返回 (read_stream, write_stream) 元组，会话清理使用 `__aexit__`（SDK v1 无 close() 方法）。
 
 ### 5.5 面试要点
 
@@ -1142,7 +1177,8 @@ judgex_uptime_seconds           # 运行时间 (当前 23 天+)
 
 ### 11.1 测试文件
 
-`oj/tests/aetherops_judgex_test.py`
+- 集成测试：`oj/tests/aetherops_judgex_test.py`
+- MCP 客户端验证：`aetherops/core/mcp_client.py`（可直接运行验证连接）
 
 6 个测试步骤：
 
@@ -1173,20 +1209,45 @@ Live 模式：
 ### 11.3 运行测试
 
 ```bash
-# 1. 进入测试目录
-cd /d/W/xm/oj/tests
-
-# 2. Demo 模式（不需要任何环境）
+# 1. Demo 模式（不需要任何环境）
 python aetherops_judgex_test.py
 
-# 3. Live 模式（JudgeX 服务器）
+# 2. Live 模式（需要连接 Go MCP 服务器）
 python aetherops_judgex_test.py --live
 
-# 4. 指定 MCP 地址
+# 3. 指定 MCP 地址（本地或通过 SSH 隧道）
 python aetherops_judgex_test.py --mcp http://localhost:50052
 
-# 5. 指定目标和操作
+# 4. 指定目标和操作
 python aetherops_judgex_test.py --target judgex-backend:8080 --action SCALE_UP
+```
+
+**MCP 客户端直连验证**（快速检查 Go 数据面是否运行）：
+
+```bash
+cd aetherops
+# 安装依赖后，通过简单的 Python 脚本验证连接
+python3 -c "
+import asyncio
+from aetherops.core.mcp_client import MCPClient
+async def test():
+    c = MCPClient('http://localhost:50052')
+    await c.connect()
+    print('Tools:', [t['name'] for t in c.list_discovered_tools()])
+    topo = await c.get_topology(include_healthy=True)
+    print(f'Topology: {topo.node_count} nodes, {topo.edge_count} edges')
+asyncio.run(test())
+"
+```
+
+**SSH 隧道方式**（Go 数据面在远程服务器）：
+
+```bash
+# 建立隧道（远程服务器的 MCP 端口转发到本地）
+ssh -L 50052:localhost:50052 user@remote-server
+
+# 另一个终端运行测试
+python aetherops_judgex_test.py --live
 ```
 
 ### 11.4 预期输出
@@ -1225,6 +1286,8 @@ Demo 脚本会展示：
 | `No module named 'langgraph'` | 未安装 LangGraph | Demo 模式下跳过，安装: `pip install langgraph` |
 | `'gbk' codec can't encode` | Windows 终端编码 | 已处理：所有非 ASCII 字符已替换为 ASCII |
 | `LLM_API_KEY not set` | 未配置 DeepSeek | 自动走启发式回退，不影响测试 |
+| `nil map panic in tracer` | mitCooldowns map 未初始化 | 修复：`var mitCooldowns = make(map[string]time.Time)`（已在最新代码中修复） |
+| `MCP connection refused` | 连接远程服务器失败 | 使用 SSH 隧道 `ssh -L 50052:localhost:50052 user@host` |
 
 ---
 
