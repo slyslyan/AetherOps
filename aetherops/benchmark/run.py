@@ -41,12 +41,12 @@ def main():
 
     if args.workflow:
         print("  Loading workflow...")
-        from aetherops.workflows.langgraph_workflow import build_workflow
+        from aetherops.workflows.workflow import build_workflow
         workflow = build_workflow()
     else:
         print("  +------------------- BENCHMARK MODE -------------------+")
-        print("  | Running standalone benchmark (no LangGraph workflow) |")
-        print("  | Use --workflow to run with the full agent pipeline   |")
+        print("  | Running standalone benchmark (no workflow)               |")
+        print("  | Use --workflow to run with the full agent pipeline       |")
         print("  +-----------------------------------------------------+")
         workflow = None
 

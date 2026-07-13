@@ -13,7 +13,7 @@
 # 部署组件：
 #   [systemd] aetherops-tracer    — eBPF 数据面探针
 #   [docker]  aetherops-core      — Python 认知面
-#   [docker]  neo4j / milvus / prometheus / grafana
+#   [docker]  prometheus / grafana
 
 set -euo pipefail
 
@@ -187,7 +187,7 @@ EOF
     systemctl enable aetherops-core
 
     # Start docker-compose now
-    info "Starting dependencies (Neo4j, Milvus, Prometheus, Grafana)..."
+    info "Starting dependencies (Prometheus, Grafana)..."
     local compose_cmd="docker-compose"
     if ! command -v docker-compose &>/dev/null; then
         compose_cmd="docker compose"
@@ -234,8 +234,6 @@ main() {
     fi
     echo ""
     echo "服务端口:"
-    echo "  Neo4j Browser:   http://localhost:7474"
-    echo "  Milvus:          localhost:19530"
     echo "  Prometheus:      http://localhost:9090"
     echo "  Grafana:         http://localhost:3000  (admin/aetherops)"
     if ! $CORE_ONLY; then

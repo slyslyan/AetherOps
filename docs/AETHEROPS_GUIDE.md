@@ -192,7 +192,6 @@ aetherops/
 ├── main.py                       # 守护进程入口（MCP/gRPC 双通道）
 ├── demo.py                       # 3 分钟演示脚本
 ├── dashboard.py                  # Streamlit 可视化仪表盘
-├── workflow.yaml                 # 工作流配置
 │
 ├── core/
 │   ├── mcp_client.py             # ★ MCP 客户端（与 Go 数据面通信）
@@ -206,7 +205,7 @@ aetherops/
 │   └── grpc_client.py            # gRPC 客户端（备选通信）
 │
 ├── workflows/
-│   └── langgraph_workflow.py     # ★ Supervisor + 5 Agent 工作流
+│   └── workflow.py                 # ★ Supervisor + 5 Agent 工作流
 │
 ├── rag/
 │   ├── retriever.py              # RAG 检索器
@@ -232,12 +231,12 @@ aetherops/
 | 文件 | 重要性 | 职责 |
 |------|--------|------|
 | `mcp_client.py` | ⭐⭐⭐⭐⭐ | 与 Go 数据面通信的桥梁 |
-| `langgraph_workflow.py` | ⭐⭐⭐⭐⭐ | 整个认知平面的心脏 |
+| `workflow.py` | ⭐⭐⭐⭐⭐ | 整个认知平面的心脏 |
 | `llm_diagnosis.py` | ⭐⭐⭐⭐⭐ | LLM 诊断决策 |
 | `causal_inference.py` | ⭐⭐⭐⭐ | LPCMCI 因果发现 |
 | `alert_correlation.py` | ⭐⭐⭐⭐ | 告警关联去重 |
 | `demo.py` | ⭐⭐⭐⭐ | 演示 + 快速验证 |
-| `workflow.yaml` | ⭐⭐⭐ | 配置声明 |
+| `workflow.yaml` | ⭐⭐⭐ | 已删除，配置逻辑直接编码在 Python 代码中 |
 
 ### 4.3 AetherOps 工作流状态
 
@@ -383,7 +382,7 @@ class MCPClient:
             {"target_node": target, "action": action})
 ```
 
-**同步→异步桥接**：由于 LangGraph 节点是同步函数，而 MCP SDK 全是异步的，通过 `run_async()` 将协程派发到后台事件循环：
+**同步→异步桥接**：由于 Workflow 节点是同步函数，而 MCP SDK 全是异步的，通过 `run_async()` 将协程派发到后台事件循环：
 
 ```python
 def run_async(coro):
@@ -1350,7 +1349,7 @@ Demo 脚本会展示：
 |------|------|------|
 | `No module named 'aetherops'` | Python 找不到模块 | 确保运行目录正确或设置 PYTHONPATH |
 | `Connection refused` | MCP 服务器未运行 | Demo 模式不需要，会自动降级 |
-| `No module named 'langgraph'` | 未安装 LangGraph | Demo 模式下跳过，安装: `pip install langgraph` |
+| `No module named 'aetherops'` | Python 找不到模块 | 确保在项目根目录运行或 `pip install -e aetherops/` |
 | `'gbk' codec can't encode` | Windows 终端编码 | 已处理：所有非 ASCII 字符已替换为 ASCII |
 | `LLM_API_KEY not set` | 未配置 DeepSeek | 自动走启发式回退，不影响测试 |
 | `nil map panic in tracer` | mitCooldowns map 未初始化 | 修复：`var mitCooldowns = make(map[string]time.Time)`（已在最新代码中修复） |
@@ -1386,7 +1385,7 @@ A：没有特别严格的数学推导，是基于经验的选择。0.6 意味着
 
 **Q6: 5 个 Agent 可以并行运行吗？**
 
-A：目前是串行的，因为每个 Agent 依赖前一个的输出（拓扑→因果→诊断→风险→自愈）。但像 Topology Analyst 和 Causal Analyst 的 Prometheus 指标拉取是独立的，可以并行。这可以通过 LangGraph 的并行节点实现——如果有人问"怎么优化"，可以说改成 DAG（有向无环图）执行，独立的分支并行。
+A：目前是串行的，因为每个 Agent 依赖前一个的输出（拓扑→因果→诊断→风险→自愈）。但像 Topology Analyst 和 Causal Analyst 的 Prometheus 指标拉取是独立的，可以并行。这可以通过 Workflow 的 DAG 分支节点实现——如果有人问"怎么优化"，可以说改成 DAG（有向无环图）执行，独立的分支并行。
 
 ### 12.3 因果发现
 
@@ -1474,15 +1473,15 @@ A：JudgeX 使用的是 cgroup v2 + chroot + seccomp-BPF 的组合，不是 Dock
 
 ### 12.8 工程实践
 
-**Q22: LangGraph 在这个项目中扮演什么角色？**
+**Q22: 工作流引擎在这个项目中扮演什么角色？**
 
-A：LangGraph 是一个构建有状态、多 Agent 工作流的框架。在这个项目中，它负责：
+A：我们曾使用 LangGraph 构建有状态、多 Agent 工作流，但后来替换为约 50 行的纯 Python `Workflow` 类。它负责：
 1. **状态管理**：workflow state 在各个 Agent 之间传递
 2. **节点编排**：定义 Supervisor 和 5 个 Agent 作为图节点
 3. **条件路由**：Supervisor 根据状态内容决定下一个节点
 4. **循环支持**：低置信度回退需要工作流能回到之前的节点
 
-如果用传统方式写，这些逻辑会散落在各种 callback 和状态机中，难以维护和扩展。
+**为什么替换 LangGraph？** 实际使用量极其有限——仅 ~13 行框架调用，却引入了 ~50MB 的依赖树。所有 Agent 节点都是纯 `dict → dict` 函数，不依赖 LangGraph 任何特性（无 checkpointing、无 streaming、无并行）。纯 Python `Workflow` 类同样清晰可维护，且零额外依赖。
 
 **Q23: 这个项目怎么保证不误操作？**
 
@@ -1546,7 +1545,7 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 | `aetherops/core/feedback.py` | 反馈循环：审计日志、审批流程、RollbackAssistant |
 | `aetherops/core/metrics_fetcher.py` | Prometheus 指标采集 |
 | `aetherops/core/risk_client.py` | 风险评估客户端（MCP/gRPC 双通道） |
-| `aetherops/workflows/langgraph_workflow.py` | Supervisor + 5 Agent 工作流，状态驱动路由 |
+| `aetherops/workflows/workflow.py` | Supervisor + 5 Agent 工作流，状态驱动路由 |
 | `aetherops/benchmark/scenarios.py` | 30 个标注故障场景，覆盖 5 种模式 + 边界 |
 | `aetherops/benchmark/evaluator.py` | 评测引擎：跑场景 + 算准确率 + 生成报告 |
 | `aetherops/benchmark/run.py` | 命令行入口：支持 --pattern / --verbose / --save |

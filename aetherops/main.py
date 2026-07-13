@@ -21,13 +21,10 @@ import time
 from threading import Thread
 from typing import Optional
 
-import yaml
-
 from aetherops.core.mcp_client import MCPClient, AnomalyEvent, stop_bg_loop
 from aetherops.core.alert_correlation import AlertCorrelator, AlertEvent
 from aetherops.core.feedback import AuditEntry, get_feedback_store
-from aetherops.rag.retriever import build_diagnosis_context, retrieve_similar
-from aetherops.workflows.langgraph_workflow import build_workflow, run_workflow
+from aetherops.workflows.workflow import build_workflow, run_workflow
 from aetherops.core.agent_observability import metrics_text, record_workflow_metrics
 
 logging.basicConfig(
@@ -40,8 +37,7 @@ logger = logging.getLogger("aetherops")
 class AetherOpsDaemon:
     """Daemon that listens for anomaly events and triggers the diagnosis workflow."""
 
-    def __init__(self, config_path: str = "workflow.yaml"):
-        self.config = self._load_config(config_path)
+    def __init__(self):
         self.workflow = build_workflow()
         self.client: Optional[MCPClient] = None
         self.running = False
@@ -83,17 +79,8 @@ class AetherOpsDaemon:
         except Exception as e:
             logger.warning("Metrics server failed to start (%s) — continuing", e)
 
-    def _load_config(self, path: str) -> dict:
-        with open(path) as f:
-            return yaml.safe_load(f)
-
     async def start(self):
         """Start listening for anomaly events via MCP SSE stream."""
-        transport = os.getenv("AETHEROPS_TRANSPORT", "mcp")
-        if transport == "grpc":
-            await self._start_grpc()
-            return
-
         # MCP path — subscribe via SSE
         mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
         self.client = MCPClient(address=mcp_addr)
@@ -119,28 +106,6 @@ class AetherOpsDaemon:
             logger.info("Daemon cancelled")
         except Exception:
             logger.exception("Unexpected error in anomaly listener")
-        finally:
-            self.stop()
-
-    async def _start_grpc(self):
-        """gRPC fallback — legacy transport path."""
-        from aetherops.core.grpc_client import AetherOpsClient
-
-        grpc_addr = os.getenv("AETHEROPS_GRPC_ADDR", "localhost:50051")
-        self.client = AetherOpsClient(address=grpc_addr)
-        self.client.connect()
-        self.running = True
-
-        min_score = float(os.getenv("ANOMALY_MIN_SCORE", "0.5"))
-        logger.info("AetherOps daemon started (gRPC). Watching for anomalies (min_score=%.2f)...", min_score)
-
-        try:
-            for event in self.client.subscribe_anomalies(min_score=min_score):
-                if not self.running:
-                    break
-                self._handle_anomaly(event)
-        except asyncio.CancelledError:
-            pass
         finally:
             self.stop()
 
@@ -185,17 +150,6 @@ class AetherOpsDaemon:
 
         # Build initial state
         initial_state = default_diagnosis_state(event)
-
-        # Inject RAG context
-        try:
-            fingerprint = f"anomaly_{event.node_id}_score_{event.anomaly_score:.2f}"
-            similar = retrieve_similar(fingerprint, top_k=3)
-            context = build_diagnosis_context(fingerprint, similar)
-            if context:
-                initial_state["rag_context"] = context
-                logger.info("Injected %d similar historical cases into context", len(similar))
-        except Exception as e:
-            logger.warning("RAG retrieval failed (non-critical): %s", e)
 
         # Run the workflow
         try:

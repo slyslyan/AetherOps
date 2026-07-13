@@ -85,23 +85,11 @@ echo ""
 kubectl get namespace "$NAMESPACE" >/dev/null 2>&1 || kubectl create namespace "$NAMESPACE"
 
 # Step 2: Deploy eBPF tracer (DaemonSet + RBAC)
-echo "[1/4] Deploying eBPF Tracer..."
+echo "[1/3] Deploying eBPF Tracer..."
 kubectl apply -f deploy/ebpf-tracer.yaml
 
-# Step 3: Deploy Neo4j (dependency graph)
-echo "[2/4] Deploying Neo4j..."
-kubectl apply -f deploy/aetherops-neo4j.yaml
-echo "  Waiting for Neo4j to be ready..."
-kubectl -n "$NAMESPACE" wait --for=condition=available --timeout=120s deployment/neo4j || true
-
-# Step 4: Deploy Milvus (vector store)
-echo "[3/4] Deploying Milvus + etcd + minio..."
-kubectl apply -f deploy/aetherops-milvus.yaml
-echo "  Waiting for Milvus to be ready..."
-kubectl -n "$NAMESPACE" wait --for=condition=available --timeout=180s deployment/milvus || true
-
-# Step 5: Deploy AetherOps Python Core (if image is available)
-echo "[4/4] Deploying AetherOps Core..."
+# Step 3: Deploy AetherOps Python Core (if image is available)
+echo "[2/3] Deploying AetherOps Core..."
 if docker image inspect aetherops-core:latest >/dev/null 2>&1; then
     if command -v minikube &>/dev/null; then
         echo "  Loading image into minikube..."
@@ -119,8 +107,6 @@ echo ""
 echo "=== AetherOps Deployment Complete ==="
 echo ""
 echo "Services:"
-echo "  Neo4j Browser:   kubectl port-forward -n $NAMESPACE svc/neo4j 7474:7474"
-echo "  Milvus:          kubectl port-forward -n $NAMESPACE svc/milvus 19530:19530"
 echo "  Prometheus:      kubectl port-forward -n $NAMESPACE svc/prometheus 9090:9090"
 echo ""
 echo "Check status:"

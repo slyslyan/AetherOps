@@ -194,7 +194,7 @@ def main():
 
     # Build and invoke the workflow in demo mode
     print(f"  {BOLD}Running minimal workflow (heuristic mode, no LLM required)...{RESET}\n")
-    from aetherops.workflows.langgraph_workflow import build_workflow
+    from aetherops.workflows.workflow import build_workflow
 
     workflow = build_workflow()
 

@@ -280,19 +280,3 @@ class AlertCorrelator:
             logger.debug("Cleaned %d stale alerts, %d stale groups", len(stale_fps), len(stale_groups))
 
 
-# ── Factory ──
-
-def create_correlator_from_config(config_path: str = "workflow.yaml") -> AlertCorrelator:
-    """Create an AlertCorrelator configured from the workflow YAML."""
-    try:
-        import yaml
-        with open(config_path) as f:
-            config = yaml.safe_load(f)
-        alert_cfg = config.get("workflow", {}).get("alert_correlation", {})
-        return AlertCorrelator(
-            window_seconds=alert_cfg.get("window_seconds", 60),
-            storm_threshold=alert_cfg.get("storm_threshold", 20),
-            storm_window_seconds=alert_cfg.get("storm_window_seconds", 1),
-        )
-    except Exception:
-        return AlertCorrelator()

@@ -91,7 +91,6 @@ aetherops:
 
   # External service addresses
   prometheusURL: "http://prometheus:9090"
-  milvusURI: "http://milvus:19530"
 
   # Transport to Go data plane
   transport: mcp
@@ -110,79 +109,3 @@ aetherops:
   # Service
   service:
     port: 9091
-
-# =============================================================================
-# Neo4j (Dependency Graph)
-# =============================================================================
-neo4j:
-  enabled: true
-
-  image:
-    repository: neo4j
-    tag: 5-community
-    registry: ""
-
-  auth:
-    username: neo4j
-    password: aetherops
-
-  resources:
-    requests:
-      memory: "1Gi"
-      cpu: "500m"
-    limits:
-      memory: "2Gi"
-      cpu: "1"
-
-  persistence:
-    enabled: true
-    size: 8Gi
-
-  service:
-    boltPort: 7687
-    httpPort: 7474
-
-# =============================================================================
-# Milvus (Vector Store for RAG)
-# =============================================================================
-milvus:
-  enabled: true
-
-  image:
-    repository: milvusdb/milvus
-    tag: v2.5.0
-    registry: ""
-
-  resources:
-    requests:
-      memory: "1Gi"
-      cpu: "500m"
-    limits:
-      memory: "4Gi"
-      cpu: "2"
-
-  persistence:
-    enabled: true
-    size: 20Gi
-
-  service:
-    grpcPort: 19530
-    httpPort: 9092
-
-  etcd:
-    enabled: true
-    image:
-      repository: quay.io/coreos/etcd
-      tag: v3.5
-
-  minio:
-    enabled: true
-    image:
-      repository: minio/minio
-      tag: latest
-    resources:
-      requests:
-        memory: "512Mi"
-        cpu: "200m"
-    persistence:
-      size: 10Gi

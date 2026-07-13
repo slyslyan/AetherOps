@@ -1,8 +1,7 @@
 """
 AetherOps — Risk assessment and remediation client.
 
-Calls the Go blast_radius tools via MCP protocol (default) or gRPC (fallback).
-Controlled by AETHEROPS_TRANSPORT env var: "mcp" (default) or "grpc".
+Calls the Go blast_radius tools via MCP protocol.
 
 All MCP operations use a sync→async bridge (run_async) since LangGraph workflow
 nodes are synchronous but the MCP SDK is fully async.  The bridge dispatches
@@ -25,19 +24,10 @@ _client: Optional[MCPClient] = None
 def _get_client() -> MCPClient:
     global _client
     if _client is None:
-        transport = os.getenv("AETHEROPS_TRANSPORT", "mcp")
-        if transport == "grpc":
-            from aetherops.core.grpc_client import AetherOpsClient
-
-            addr = os.getenv("AETHEROPS_GRPC_ADDR", "localhost:50051")
-            client: MCPClient = AetherOpsClient(address=addr)  # type: ignore
-            client.connect()
-            _client = client  # type: ignore
-        else:
-            mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
-            client = MCPClient(address=mcp_addr)
-            run_async(client.connect())
-            _client = client
+        mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
+        client = MCPClient(address=mcp_addr)
+        run_async(client.connect())
+        _client = client
     return _client
 
 

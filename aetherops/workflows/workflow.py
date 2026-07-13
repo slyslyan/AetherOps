@@ -1,15 +1,15 @@
 """
-AetherOps — Multi-Agent LangGraph Cognitive Workflow.
+AetherOps — Multi-Agent Cognitive Workflow.
 
 Architecture: Planner → Supervisor → Expert Agents (+ Critic)
-  - Planner          LLM-generated dynamic execution plan based on anomaly + RAG
+  - Planner          LLM-generated dynamic execution plan based on anomaly
   - Supervisor       route to next agent per plan, handle critic feedback loops
   - Topology Analyst  fetch service graph from Go data plane
   - Causal Analyst    fetch metrics + run causal discovery
   - LLM Diagnostician LLM-based root cause diagnosis (multi-turn)
   - Critic           reflection agent — reviews diagnosis quality before proceeding
   - Risk Assessor     blast radius evaluation
-  - Remediation Executor  graded remediation + RAG storage + prompt optimization
+  - Remediation Executor  graded remediation + incident memory storage
 """
 
 from __future__ import annotations
@@ -19,10 +19,7 @@ import logging
 import os
 import time
 from dataclasses import asdict
-from typing import Annotated, Any, Dict, List, Literal, Optional, TypedDict
-
-import yaml
-from langgraph.graph import END, StateGraph
+from typing import Any, Literal, Optional, TypedDict
 
 from aetherops.core.causal_inference import run_causal_discovery
 from aetherops.core.llm_diagnosis import diagnose
@@ -47,24 +44,14 @@ logger = logging.getLogger(__name__)
 
 
 def _fetch_topology(include_healthy: bool = False):
-    """Shared helper: fetch topology via MCP or gRPC, returns a snapshot."""
-    transport = os.getenv("AETHEROPS_TRANSPORT", "mcp")
-    if transport == "grpc":
-        from aetherops.core.grpc_client import AetherOpsClient
+    """Shared helper: fetch topology via MCP, returns a snapshot."""
+    from aetherops.core.mcp_client import MCPClient, run_async
 
-        addr = os.getenv("AETHEROPS_GRPC_ADDR", "localhost:50051")
-        client = AetherOpsClient(address=addr)
-        client.connect()
-        snapshot = client.get_topology(include_healthy=include_healthy)
-        client.close()
-    else:
-        from aetherops.core.mcp_client import MCPClient, run_async
-
-        mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
-        client = MCPClient(address=mcp_addr)
-        run_async(client.connect())
-        snapshot = run_async(client.get_topology(include_healthy=include_healthy))
-        client.close()
+    mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
+    client = MCPClient(address=mcp_addr)
+    run_async(client.connect())
+    snapshot = run_async(client.get_topology(include_healthy=include_healthy))
+    client.close()
     return snapshot
 
 
@@ -671,29 +658,7 @@ def remediation_executor(state: DiagnosisState) -> Dict:
         mttr_value = time.time() - anomaly_detected_at
     feedback.record_outcome(trace_id=trace_id, outcome=outcome, mttr_seconds=mttr_value)
 
-    # 5c. Store to RAG
-    try:
-        from aetherops.rag.store import store_diagnosis
-
-        record = {
-            "anomaly_event": state.get("anomaly_event"),
-            "causal_graph": state.get("causal_graph"),
-            "diagnosis_report": state.get("diagnosis_report"),
-            "execution_result": result.get("execution_result"),
-            "recovery_report": recovery_report,
-            "plan": state.get("plan"),
-            "plan_rationale": state.get("plan_rationale"),
-            "critic_feedback": state.get("critic_feedback"),
-            "critic_loop_count": state.get("critic_loop_count"),
-            "status": "success" if not state.get("workflow_error") else "failed",
-        }
-        store_diagnosis(record)
-        logger.info("RemediationExecutor: diagnosis stored to RAG")
-        trigger_hook(HookEvent.RAG_STORED, trace_id=trace_id, status=result.get("execution_result", {}).get("status"))
-    except Exception as e:
-        logger.warning("RAG store failed (non-critical): %s", e)
-
-    # 5d. Save to incident memory
+    # 5c. Save to incident memory
     try:
         incident = IncidentMemory()
         incident.save(trace_id, {
@@ -707,13 +672,6 @@ def remediation_executor(state: DiagnosisState) -> Dict:
         logger.info("RemediationExecutor: incident saved to memory (id=%s)", trace_id)
     except Exception as e:
         logger.warning("Incident memory save failed (non-critical): %s", e)
-
-    # 5e. Trigger DSPy optimization
-    try:
-        from aetherops.dspy.optimizer import async_optimize
-        async_optimize()
-    except Exception as e:
-        logger.warning("DSPy optimize trigger failed (non-critical): %s", e)
 
     recovery_report = result.get("recovery_report", "")
     exec_result = result.get("execution_result", {})
@@ -909,52 +867,63 @@ def supervisor(state: DiagnosisState) -> Dict:
     }
 
 
+# ── Workflow Engine ──
+
+class Workflow:
+    """Minimal workflow engine — replaces LangGraph StateGraph.
+
+    Holds a mapping of agent name → callable and an entry point.
+    Each agent receives the current state dict and returns a dict of updates.
+    The loop reads ``state["next_agent"]`` (set by the supervisor) to decide
+    which agent to run next, stopping when ``next_agent == "finish"`` or the
+    state sets ``completed=True``.
+    """
+
+    def __init__(
+        self,
+        agents: dict[str, callable],
+        entry_point: str,
+    ):
+        self._agents = dict(agents)
+        self._entry = entry_point
+
+    def invoke(self, state: dict) -> dict:
+        """Run the workflow loop, mutating *state* in place.
+
+        Each agent returns state updates.  After every non-supervisor agent
+        the loop routes back to the supervisor for the next routing decision.
+        """
+        state = dict(state)
+        agent = state.get("next_agent", self._entry)
+        while agent in self._agents:
+            result = self._agents[agent](state)
+            state.update(result)
+            # Always route back to supervisor unless workflow is done
+            if not state.get("completed") and agent not in ("supervisor", "finish"):
+                agent = "supervisor"
+            else:
+                agent = state.get("next_agent", "finish")
+        return state
+
+
 # ── Graph Builder ──
 
-def build_workflow() -> StateGraph:
-    """Build and return the multi-agent LangGraph workflow."""
-    workflow = StateGraph(DiagnosisState)
-
-    # Add nodes
-    workflow.add_node("supervisor", supervisor)
-    workflow.add_node("planner", planner)
-    workflow.add_node("topology_analyst", topology_analyst)
-    workflow.add_node("causal_analyst", causal_analyst)
-    workflow.add_node("llm_diagnostician", llm_diagnostician)
-    workflow.add_node("critic", critic)
-    workflow.add_node("risk_assessor", risk_assessor)
-    workflow.add_node("remediation_executor", remediation_executor)
-
-    # Entry point
-    workflow.set_entry_point("supervisor")
-
-    # All agents return to supervisor for routing
-    for agent in ["planner", "topology_analyst", "causal_analyst", "llm_diagnostician",
-                   "critic", "risk_assessor", "remediation_executor"]:
-        workflow.add_edge(agent, "supervisor")
-
-    # Supervisor routes based on next_agent
-    router_map = {
-        "planner": "planner",
-        "topology_analyst": "topology_analyst",
-        "causal_analyst": "causal_analyst",
-        "llm_diagnostician": "llm_diagnostician",
-        "critic": "critic",
-        "risk_assessor": "risk_assessor",
-        "remediation_executor": "remediation_executor",
-        "finish": END,
+def build_workflow() -> Workflow:
+    """Build and return the multi-agent workflow engine."""
+    agents = {
+        "supervisor": supervisor,
+        "planner": planner,
+        "topology_analyst": topology_analyst,
+        "causal_analyst": causal_analyst,
+        "llm_diagnostician": llm_diagnostician,
+        "critic": critic,
+        "risk_assessor": risk_assessor,
+        "remediation_executor": remediation_executor,
     }
-
-    workflow.add_conditional_edges(
-        "supervisor",
-        lambda state: state.get("next_agent", "finish"),
-        router_map,
-    )
-
-    return workflow.compile()
+    return Workflow(agents=agents, entry_point="supervisor")
 
 
-def run_workflow(workflow: StateGraph, initial_state: dict) -> dict:
+def run_workflow(workflow: Workflow, initial_state: dict) -> dict:
     """Invoke a workflow with START/END/ERROR hooks."""
     trigger_hook(HookEvent.WORKFLOW_START, state=initial_state)
     try:

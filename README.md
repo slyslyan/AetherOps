@@ -141,8 +141,6 @@ docker compose -f docker-compose.aetherops.yml up -d
 
 启动以下服务：
 - AetherOps Core（Python 认知面）
-- Neo4j（依赖关系图存储）
-- Milvus + Etcd + MinIO（RAG 向量存储）
 - Prometheus + Grafana（可观测性）
 
 ### Helm 多集群部署
@@ -170,17 +168,6 @@ helm install aetherops ./helm/aetherops/ -n ebpf-system --create-namespace
 helm install aetherops ./helm/aetherops/ -n ebpf-system --create-namespace \
   --set tracer.networkInterface=eth0 \
   --set image.registry=my-registry.io
-
-# 仅部署数据面（禁用 Neo4j/Milvus）
-helm install aetherops ./helm/aetherops/ -n ebpf-system --create-namespace \
-  --set neo4j.enabled=false \
-  --set milvus.enabled=false
-
-# 生产集群启用手持久化
-helm install aetherops ./helm/aetherops/ -n ebpf-system --create-namespace \
-  --set neo4j.persistence.enabled=true \
-  --set neo4j.persistence.size=10Gi \
-  --set milvus.persistence.enabled=true
 
 # 指定 LLM 配置
 helm install aetherops ./helm/aetherops/ -n ebpf-system --create-namespace \
@@ -216,8 +203,6 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │                                                    │
 │  docker-compose:                                    │
 │  ├─ aetherops-core    (Python 认知面)               │
-│  ├─ neo4j             (图数据库)                    │
-│  ├─ milvus + etcd + minio  (向量数据库)             │
 │  ├─ prometheus        (指标存储)                    │
 │  └─ grafana           (可视化)                      │
 └──────────────────────────────────────────────────┘
@@ -283,10 +268,9 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   └── grpc/                       #  gRPC 服务 (拓扑/异常事件流)
 │
 ├── aetherops/                      # ★ Python 认知面 (AetherOps)
-│   ├── main.py                     # 守护进程入口 (MCP/gRPC 双通道)
+│   ├── main.py                     # 守护进程入口 (MCP 双通道)
 │   ├── demo.py                     # 3 分钟演示脚本
 │   ├── dashboard.py                # Streamlit 可视化仪表盘
-│   ├── workflow.yaml               # 工作流配置
 │   │
 │   ├── core/                       # 核心模块
 │   │   ├── mcp_client.py           # ★ MCP 客户端
@@ -300,7 +284,7 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   │   └── metrics_fetcher.py      # Prometheus 指标采集
 │   │
 │   ├── workflows/
-│   │   └── langgraph_workflow.py   # ★ Supervisor + 5 Agent 工作流
+│   │   └── workflow.py             # ★ Supervisor + 5 Agent 工作流（纯 Python，无 LangGraph 依赖）
 │   │
 │   ├── rag/                        # RAG 知识库
 │   │   ├── retriever.py
@@ -326,8 +310,6 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 ├── deploy/                         # K8s 部署清单
 │   ├── ebpf-tracer.yaml            # Go 数据面 DaemonSet
 │   ├── aetherops-core.yaml         # Python 认知面 Deployment
-│   ├── aetherops-neo4j.yaml        # Neo4j 图数据库
-│   ├── aetherops-milvus.yaml       # Milvus 向量数据库
 │   ├── aetherops-install.sh        # 一键安装脚本（含 --helm 模式）
 │   ├── example-policies.json       # 策略配置示例
 │   └── nonk8s/                     # 非 K8s 单机部署
@@ -354,11 +336,11 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 |----|------|
 | **内核** | eBPF, kprobe/kretprobe, TC, uprobe, CO-RE, BPF maps, Ring Buffer, cgroupv2 |
 | **数据面** | Go 1.24, cilium/ebpf, bpf2go, Prometheus client, client-go |
-| **认知面** | Python 3.11, LangGraph, LangChain, DSPy, causal-learn, Prometheus client |
+| **认知面** | Python 3.11, 纯 Python Workflow, DSPy, causal-learn, Prometheus client |
 | **AI** | 兼容 OpenAI 协议 (DeepSeek / 通义千问等), 断路器, 注入防护 |
 | **通信** | MCP 协议 (JSON-RPC 2.0 over HTTP SSE), gRPC (备选) |
 | **算法** | EMA, 滑动窗口 P95, 反向随机游走 (PageRank), LPCMCI 因果发现 |
-| **存储** | Neo4j (图), Milvus (向量), Prometheus (指标) |
+| **存储** | Prometheus (指标) |
 | **部署** | Docker, K3s, Kubernetes DaemonSet/Deployment, Helm, systemd/docker-compose |
 | **通知** | 飞书 / 钉钉 webhook |
 

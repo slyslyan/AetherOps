@@ -15,11 +15,11 @@ AetherOps 是一个 AI 驱动的智能运维 Agent 系统，由**两层架构**�
 |----|------|
 | **内核** | eBPF、kprobe/kretprobe、TC、uprobe、CO-RE、BPF Map、Ring Buffer |
 | **数据面** | Go 1.24、cilium/ebpf、bpf2go、Prometheus client_golang、client-go |
-| **认知面** | Python 3.11、LangGraph、LangChain、causal-learn、DSPy |
+| **认知面** | Python 3.11、纯 Python Workflow、causal-learn、DSPy |
 | **AI** | 兼容 OpenAI 协议（DeepSeek V4 Flash / 通义千问等） |
 | **通信** | MCP 协议（主）、gRPC（备选） |
 | **算法** | EMA 指数移动平均、滑动窗口 P95、反向随机游走（PageRank）、LPCMCI 因果发现 |
-| **存储** | Neo4j（依赖图）、Milvus（RAG 向量）、Prometheus（指标） |
+| **存储** | Prometheus（指标） |
 | **部署** | Docker、K3s、Kubernetes DaemonSet/Deployment |
 
 ## 核心功能

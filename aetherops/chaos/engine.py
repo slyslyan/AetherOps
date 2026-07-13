@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
-from aetherops.workflows.langgraph_workflow import run_workflow
+from aetherops.workflows.workflow import run_workflow
 
 logger = logging.getLogger(__name__)
 

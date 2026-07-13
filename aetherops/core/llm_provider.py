@@ -2,8 +2,7 @@
 AetherOps — LLM Provider Abstraction.
 
 Supports multiple LLM backends behind a common interface:
-- DeepSeek (current default)
-- OpenAI / compatible (Azure, vLLM, etc.)
+- OpenAI-compatible (DeepSeek, OpenAI, Azure, vLLM, etc.)
 - Anthropic
 - Ollama (local models, no API key needed)
 
@@ -23,8 +22,6 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from aetherops.core.config import AetherOpsConfig
-
 logger = logging.getLogger(__name__)
 
 
@@ -41,10 +38,7 @@ class DiagnosisReport:
 
 
 def parse_llm_response(raw: str) -> DiagnosisReport:
-    """Parse LLM response into a structured DiagnosisReport.
-
-    Shared across all providers since the response format is the same.
-    """
+    """Parse LLM response into a structured DiagnosisReport."""
     try:
         if "```json" in raw:
             json_str = raw.split("```json")[1].split("```")[0].strip()
@@ -86,7 +80,6 @@ class LLMProvider(ABC):
         user_message: str,
         timeout: int = 120,
     ) -> Optional[DiagnosisReport]:
-        """Run diagnosis and return a structured report, or None on failure."""
         ...
 
     def chat(
@@ -97,11 +90,7 @@ class LLMProvider(ABC):
         temperature: float = 0.2,
         timeout: int = 30,
     ) -> Optional[str]:
-        """Generic chat completion (free-form text, not diagnosis-specific).
-
-        Default implementation delegates to _chat_impl() which each provider
-        must override.  Returns raw response text, or None on failure.
-        """
+        """Generic chat completion. Returns raw text or None on failure."""
         return self._chat_impl(system_prompt, user_message, max_tokens, temperature, timeout)
 
     @abstractmethod
@@ -113,72 +102,36 @@ class LLMProvider(ABC):
         temperature: float,
         timeout: int,
     ) -> Optional[str]:
-        """Provider-specific chat implementation."""
         ...
 
     @property
     @abstractmethod
     def name(self) -> str:
-        """Human-readable provider name for logging/metrics."""
         ...
 
 
 # ---------- concrete providers ----------
 
-class DeepSeekProvider(LLMProvider):
-    """DeepSeek API (compatible with OpenAI format)."""
+class OpenAICompatibleProvider(LLMProvider):
+    """For any OpenAI-compatible chat completions API (DeepSeek, OpenAI, Azure, vLLM, etc.)."""
 
     def __init__(
         self,
         api_key: str,
-        model: str = "deepseek-v4-flash",
-        base_url: str = "https://api.deepseek.com/v1",
+        model: str,
+        base_url: str,
+        provider_label: str = "OpenAI",
     ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self._label = provider_label
 
     @property
     def name(self) -> str:
-        return f"DeepSeek({self.model})"
+        return f"{self._label}({self.model})"
 
-    def diagnose(
-        self,
-        system_prompt: str,
-        user_message: str,
-        timeout: int = 120,
-    ) -> Optional[DiagnosisReport]:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.3,
-        }
-
-        try:
-            resp = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            raw = result["choices"][0]["message"]["content"]
-            return parse_llm_response(raw)
-        except httpx.TimeoutException:
-            logger.error("DeepSeek request timed out after %ds", timeout)
-        except Exception as e:
-            logger.error("DeepSeek diagnosis failed: %s", e)
-        return None
-
-    def _chat_impl(
+    def _request(
         self,
         system_prompt: str,
         user_message: str,
@@ -207,27 +160,11 @@ class DeepSeekProvider(LLMProvider):
             )
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
+        except httpx.TimeoutException:
+            logger.error("%s request timed out after %ds", self._label, timeout)
         except Exception as e:
-            logger.error("DeepSeek chat failed: %s", e)
-            return None
-
-
-class OpenAIProvider(LLMProvider):
-    """Generic OpenAI-compatible provider (works with Azure, vLLM, etc.)."""
-
-    def __init__(
-        self,
-        api_key: str,
-        model: str = "gpt-4o",
-        base_url: str = "https://api.openai.com/v1",
-    ):
-        self.api_key = api_key
-        self.model = model
-        self.base_url = base_url.rstrip("/")
-
-    @property
-    def name(self) -> str:
-        return f"OpenAI({self.model})"
+            logger.error("%s request failed: %s", self._label, e)
+        return None
 
     def diagnose(
         self,
@@ -235,35 +172,8 @@ class OpenAIProvider(LLMProvider):
         user_message: str,
         timeout: int = 120,
     ) -> Optional[DiagnosisReport]:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.3,
-        }
-
-        try:
-            resp = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            raw = result["choices"][0]["message"]["content"]
-            return parse_llm_response(raw)
-        except httpx.TimeoutException:
-            logger.error("OpenAI request timed out after %ds", timeout)
-        except Exception as e:
-            logger.error("OpenAI diagnosis failed: %s", e)
-        return None
+        raw = self._request(system_prompt, user_message, 4096, 0.3, timeout)
+        return parse_llm_response(raw) if raw else None
 
     def _chat_impl(
         self,
@@ -273,34 +183,11 @@ class OpenAIProvider(LLMProvider):
         temperature: float,
         timeout: int,
     ) -> Optional[str]:
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_message},
-            ],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
-        try:
-            resp = httpx.post(
-                f"{self.base_url}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
-        except Exception as e:
-            logger.error("OpenAI chat failed: %s", e)
-            return None
+        return self._request(system_prompt, user_message, max_tokens, temperature, timeout)
 
 
 class AnthropicProvider(LLMProvider):
-    """Anthropic Claude API."""
+    """Anthropic Claude API (uses /v1/messages)."""
 
     def __init__(
         self,
@@ -316,44 +203,7 @@ class AnthropicProvider(LLMProvider):
     def name(self) -> str:
         return f"Anthropic({self.model})"
 
-    def diagnose(
-        self,
-        system_prompt: str,
-        user_message: str,
-        timeout: int = 120,
-    ) -> Optional[DiagnosisReport]:
-        payload = {
-            "model": self.model,
-            "system": system_prompt,
-            "messages": [
-                {"role": "user", "content": user_message},
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.3,
-        }
-
-        try:
-            resp = httpx.post(
-                f"{self.base_url}/messages",
-                headers={
-                    "x-api-key": self.api_key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            raw = result["content"][0]["text"]
-            return parse_llm_response(raw)
-        except httpx.TimeoutException:
-            logger.error("Anthropic request timed out after %ds", timeout)
-        except Exception as e:
-            logger.error("Anthropic diagnosis failed: %s", e)
-        return None
-
-    def _chat_impl(
+    def _request(
         self,
         system_prompt: str,
         user_message: str,
@@ -381,9 +231,30 @@ class AnthropicProvider(LLMProvider):
             )
             resp.raise_for_status()
             return resp.json()["content"][0]["text"]
+        except httpx.TimeoutException:
+            logger.error("Anthropic request timed out after %ds", timeout)
         except Exception as e:
-            logger.error("Anthropic chat failed: %s", e)
-            return None
+            logger.error("Anthropic request failed: %s", e)
+        return None
+
+    def diagnose(
+        self,
+        system_prompt: str,
+        user_message: str,
+        timeout: int = 120,
+    ) -> Optional[DiagnosisReport]:
+        raw = self._request(system_prompt, user_message, 4096, 0.3, timeout)
+        return parse_llm_response(raw) if raw else None
+
+    def _chat_impl(
+        self,
+        system_prompt: str,
+        user_message: str,
+        max_tokens: int,
+        temperature: float,
+        timeout: int,
+    ) -> Optional[str]:
+        return self._request(system_prompt, user_message, max_tokens, temperature, timeout)
 
 
 class OllamaProvider(LLMProvider):
@@ -401,40 +272,7 @@ class OllamaProvider(LLMProvider):
     def name(self) -> str:
         return f"Ollama({self.model})"
 
-    def diagnose(
-        self,
-        system_prompt: str,
-        user_message: str,
-        timeout: int = 180,
-    ) -> Optional[DiagnosisReport]:
-        payload = {
-            "model": self.model,
-            "system": system_prompt,
-            "prompt": user_message,
-            "stream": False,
-            "options": {
-                "num_predict": 4096,
-                "temperature": 0.3,
-            },
-        }
-
-        try:
-            resp = httpx.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=timeout,
-            )
-            resp.raise_for_status()
-            result = resp.json()
-            raw = result.get("response", "")
-            return parse_llm_response(raw)
-        except httpx.TimeoutException:
-            logger.error("Ollama request timed out after %ds", timeout)
-        except Exception as e:
-            logger.error("Ollama diagnosis failed: %s", e)
-        return None
-
-    def _chat_impl(
+    def _request(
         self,
         system_prompt: str,
         user_message: str,
@@ -447,10 +285,7 @@ class OllamaProvider(LLMProvider):
             "system": system_prompt,
             "prompt": user_message,
             "stream": False,
-            "options": {
-                "num_predict": max_tokens,
-                "temperature": temperature,
-            },
+            "options": {"num_predict": max_tokens, "temperature": temperature},
         }
         try:
             resp = httpx.post(
@@ -460,63 +295,76 @@ class OllamaProvider(LLMProvider):
             )
             resp.raise_for_status()
             return resp.json().get("response")
+        except httpx.TimeoutException:
+            logger.error("Ollama request timed out after %ds", timeout)
         except Exception as e:
-            logger.error("Ollama chat failed: %s", e)
-            return None
+            logger.error("Ollama request failed: %s", e)
+        return None
+
+    def diagnose(
+        self,
+        system_prompt: str,
+        user_message: str,
+        timeout: int = 180,
+    ) -> Optional[DiagnosisReport]:
+        raw = self._request(system_prompt, user_message, 4096, 0.3, timeout)
+        return parse_llm_response(raw) if raw else None
+
+    def _chat_impl(
+        self,
+        system_prompt: str,
+        user_message: str,
+        max_tokens: int,
+        temperature: float,
+        timeout: int,
+    ) -> Optional[str]:
+        return self._request(system_prompt, user_message, max_tokens, temperature, timeout)
 
 
 # ---------- factory ----------
 
 def get_default_system_prompt() -> str:
-    """Return the default diagnosis system prompt with known fault patterns."""
     from aetherops.core.llm_diagnosis import DIAGNOSIS_SYSTEM_PROMPT
     return DIAGNOSIS_SYSTEM_PROMPT
+
+
+_PROVIDER_ALIASES: Dict[str, tuple] = {
+    "deepseek": (OpenAICompatibleProvider, "deepseek-v4-flash", "https://api.deepseek.com/v1", "DeepSeek"),
+    "openai":   (OpenAICompatibleProvider, "gpt-4o",             "https://api.openai.com/v1",    "OpenAI"),
+    "anthropic": (AnthropicProvider,       "claude-sonnet-4-6",  "https://api.anthropic.com/v1",  None),
+    "ollama":    (OllamaProvider,          "llama3",              "http://localhost:11434",        None),
+}
 
 
 class ProviderFactory:
     """Create an LLMProvider from environment configuration."""
 
-    PROVIDER_MAP: Dict[str, type] = {
-        "deepseek": DeepSeekProvider,
-        "openai": OpenAIProvider,
-        "anthropic": AnthropicProvider,
-        "ollama": OllamaProvider,
-    }
-
     @classmethod
     def from_env(cls) -> Optional[LLMProvider]:
-        """Read LLM_PROVIDER and associated env vars, return a provider or None."""
         provider_type = os.getenv("LLM_PROVIDER", "deepseek").lower()
         api_key = os.getenv("LLM_API_KEY", "")
         model = os.getenv("LLM_MODEL", "")
         base_url = os.getenv("LLM_BASE_URL", "")
 
+        info = _PROVIDER_ALIASES.get(provider_type)
+        if not info:
+            logger.warning("Unknown LLM_PROVIDER=%s, falling back to DeepSeek", provider_type)
+            info = _PROVIDER_ALIASES["deepseek"]
+
+        provider_cls, default_model, default_url, label = info
+
+        model = model or default_model
+        base_url = base_url or default_url
+
         if provider_type == "ollama":
-            model = model or "llama3"
-            base_url = base_url or "http://localhost:11434"
-            return OllamaProvider(model=model, base_url=base_url)
+            return provider_cls(model=model, base_url=base_url)
 
         if not api_key:
-            logger.warning(
-                "LLM_PROVIDER=%s but LLM_API_KEY not set, cannot create provider",
-                provider_type,
-            )
+            logger.warning("LLM_PROVIDER=%s but LLM_API_KEY not set", provider_type)
             return None
 
-        provider_cls = cls.PROVIDER_MAP.get(provider_type)
-        if not provider_cls:
-            logger.warning("Unknown LLM_PROVIDER=%s, falling back to DeepSeek", provider_type)
-            provider_cls = DeepSeekProvider
-
-        if provider_type == "deepseek":
-            model = model or "deepseek-v4-flash"
-            base_url = base_url or "https://api.deepseek.com/v1"
-        elif provider_type == "openai":
-            model = model or "gpt-4o"
-            base_url = base_url or "https://api.openai.com/v1"
-        elif provider_type == "anthropic":
-            model = model or "claude-sonnet-4-6"
-            base_url = base_url or "https://api.anthropic.com/v1"
+        if provider_cls is OpenAICompatibleProvider:
+            return provider_cls(api_key=api_key, model=model, base_url=base_url, provider_label=label)
 
         return provider_cls(api_key=api_key, model=model, base_url=base_url)
 
@@ -528,17 +376,19 @@ class ProviderFactory:
         model: str = "",
         base_url: str = "",
     ) -> Optional[LLMProvider]:
-        """Create a provider from explicit parameters (bypasses env)."""
         provider_type = provider_type.lower()
+        info = _PROVIDER_ALIASES.get(provider_type)
+        if not info:
+            return None
+
+        provider_cls, default_model, default_url, label = info
+        model = model or default_model
+        base_url = base_url or default_url
 
         if provider_type == "ollama":
-            return OllamaProvider(model=model or "llama3", base_url=base_url or "http://localhost:11434")
-
+            return provider_cls(model=model, base_url=base_url)
         if not api_key:
             return None
-
-        provider_cls = cls.PROVIDER_MAP.get(provider_type)
-        if not provider_cls:
-            return None
-
+        if provider_cls is OpenAICompatibleProvider:
+            return provider_cls(api_key=api_key, model=model, base_url=base_url, provider_label=label)
         return provider_cls(api_key=api_key, model=model, base_url=base_url)
