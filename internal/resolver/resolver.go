@@ -14,8 +14,8 @@ const maxCacheSize = 1000
 
 // ServiceIdentity 提供 PID 到服务名的解析。
 type ServiceIdentity struct {
-	mu       sync.RWMutex
-	cache    map[uint32]*cacheEntry
+	mu          sync.RWMutex
+	cache       map[uint32]*cacheEntry
 	podResolver PodNameResolver // optional K8s pod name lookup
 }
 

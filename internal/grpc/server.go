@@ -11,8 +11,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 
-	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/blastradius"
+	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/graph"
 	pb "ebpf-autoheal/proto/gen"
 )
@@ -135,13 +135,13 @@ func (s *Server) PublishEvent(msg EventMsg) {
 	}
 
 	evt := &pb.AnomalyEvent{
-		NodeId:           msg.NodeID,
-		AnomalyScore:     msg.AnomalyScore,
-		AvgLatencyMs:     msg.AvgLatMs,
-		CallCount:        msg.CallCount,
-		SuspectChain:     msg.SuspectChain,
+		NodeId:            msg.NodeID,
+		AnomalyScore:      msg.AnomalyScore,
+		AvgLatencyMs:      msg.AvgLatMs,
+		CallCount:         msg.CallCount,
+		SuspectChain:      msg.SuspectChain,
 		TimestampUnixNano: time.Now().UnixNano(),
-		RootCauseScore:   msg.RootCauseScore,
+		RootCauseScore:    msg.RootCauseScore,
 	}
 
 	for _, sub := range s.subscribers {

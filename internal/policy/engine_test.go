@@ -67,8 +67,8 @@ func TestCheckActionDeniedByProtectedService(t *testing.T) {
 func TestCheckActionDeniedByProtectedIP(t *testing.T) {
 	pe := NewEngine("")
 	action := PolicyAction{
-		Action:   ActionTCPDrop,
-		TargetIP: "127.0.0.1",
+		Action:    ActionTCPDrop,
+		TargetIP:  "127.0.0.1",
 		Timestamp: time.Now(),
 	}
 	result := pe.Check(action)
@@ -135,11 +135,11 @@ func TestCheckScaleUpNotDeniedByMaxReplica(t *testing.T) {
 func TestCheckScaleDownDeniedByMaxReplica(t *testing.T) {
 	pe := NewEngine("")
 	action := PolicyAction{
-		Action:     ActionScaleDown,
-		TargetNode: "my-app",
-		Replicas:   10,
+		Action:      ActionScaleDown,
+		TargetNode:  "my-app",
+		Replicas:    10,
 		ScaleChange: 3, // 30% > 20% max
-		Timestamp:  time.Now(),
+		Timestamp:   time.Now(),
 	}
 	result := pe.Check(action)
 	if !result.Denied {

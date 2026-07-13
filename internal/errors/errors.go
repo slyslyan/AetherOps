@@ -11,27 +11,27 @@ var (
 
 // eBPF load/attach errors
 var (
-	ErrEBPFLoad       = fmt.Errorf("eBPF object load failed")
-	ErrKprobeAttach   = fmt.Errorf("kprobe attach failed")
-	ErrRingBufCreate  = fmt.Errorf("ring buffer create failed")
-	ErrRemoveMemlock  = fmt.Errorf("remove memlock failed")
-	ErrHTTPProbeLoad  = fmt.Errorf("HTTP probe load failed")
+	ErrEBPFLoad      = fmt.Errorf("eBPF object load failed")
+	ErrKprobeAttach  = fmt.Errorf("kprobe attach failed")
+	ErrRingBufCreate = fmt.Errorf("ring buffer create failed")
+	ErrRemoveMemlock = fmt.Errorf("remove memlock failed")
+	ErrHTTPProbeLoad = fmt.Errorf("HTTP probe load failed")
 )
 
 // TC drop errors
 var (
-	ErrTCCmd          = fmt.Errorf("tc command failed")
-	ErrTCMapDelete    = fmt.Errorf("tc eBPF map delete failed")
-	ErrInvalidIface   = fmt.Errorf("invalid network interface")
-	ErrInvalidIP      = fmt.Errorf("invalid IP address")
+	ErrTCCmd        = fmt.Errorf("tc command failed")
+	ErrTCMapDelete  = fmt.Errorf("tc eBPF map delete failed")
+	ErrInvalidIface = fmt.Errorf("invalid network interface")
+	ErrInvalidIP    = fmt.Errorf("invalid IP address")
 )
 
 // Mitigation errors
 var (
-	ErrHTTPRequest    = fmt.Errorf("HTTP request to target failed")
-	ErrPprofGen       = fmt.Errorf("pprof flamegraph generation failed")
-	ErrPacketCapture  = fmt.Errorf("packet capture failed")
-	ErrFeishuNotify   = fmt.Errorf("Feishu notification failed")
+	ErrHTTPRequest   = fmt.Errorf("HTTP request to target failed")
+	ErrPprofGen      = fmt.Errorf("pprof flamegraph generation failed")
+	ErrPacketCapture = fmt.Errorf("packet capture failed")
+	ErrFeishuNotify  = fmt.Errorf("Feishu notification failed")
 )
 
 // Policy errors

@@ -166,4 +166,3 @@ func TestEvaluateAffectedServicesList(t *testing.T) {
 		t.Errorf("expected affected services to include frontend and auth, got %v", report.AffectedServices)
 	}
 }
-

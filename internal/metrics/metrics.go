@@ -1,8 +1,8 @@
 package metrics
 
 import (
-	"log/slog"
 	"fmt"
+	"log/slog"
 	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"

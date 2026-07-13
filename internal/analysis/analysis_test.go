@@ -183,9 +183,9 @@ func TestClusterSuspectsNilForSingle(t *testing.T) {
 func TestClusterSuspectsGroupsSimilar(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "a", Score: 100},
-		{Node: "b", Score: 92},  // within 15% of 100
-		{Node: "c", Score: 50},  // far from 92
-		{Node: "d", Score: 45},  // within 15% of 50
+		{Node: "b", Score: 92}, // within 15% of 100
+		{Node: "c", Score: 50}, // far from 92
+		{Node: "d", Score: 45}, // within 15% of 50
 	}
 	clusters := ClusterSuspects(suspects)
 	if len(clusters) != 2 {

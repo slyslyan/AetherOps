@@ -102,9 +102,9 @@ func (g *ServiceGraph) AddCall(src, dst string, latencyMs float64, isError bool)
 	e, ok := g.Edges[key]
 	if !ok {
 		e = &ServiceEdge{
-			Src:          src,
-			Dst:          dst,
-			WindowSize:   30,
+			Src:           src,
+			Dst:           dst,
+			WindowSize:    30,
 			LatencyWindow: make([]float64, 0, 30),
 		}
 		g.Edges[key] = e

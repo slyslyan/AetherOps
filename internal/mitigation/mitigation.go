@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/config"
+	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/graph"
 )
 

@@ -11,8 +11,8 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/blastradius"
+	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/graph"
 	"ebpf-autoheal/internal/mitigation"
 	"ebpf-autoheal/internal/policy"
@@ -21,10 +21,10 @@ import (
 
 // Server 封装 MCP 服务。
 type Server struct {
-	mcp    *server.MCPServer
-	sse    *server.SSEServer
-	httpS  *http.Server
-	addr   string
+	mcp   *server.MCPServer
+	sse   *server.SSEServer
+	httpS *http.Server
+	addr  string
 
 	graph      *graph.ServiceGraph
 	mitigation *mitigation.Service
@@ -405,4 +405,3 @@ func (s *Server) handleReadPolicyResource(ctx context.Context, req mcp.ReadResou
 		mcp.TextResourceContents{URI: "policy://rules", MIMEType: "application/json", Text: string(data)},
 	}, nil
 }
-
