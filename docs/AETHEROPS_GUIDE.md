@@ -23,11 +23,7 @@
 12. [反馈循环与审计（Feedback Loop）](#97-反馈循环与审计feedback-loop)
 13. [Chaos Engineering（Chaos Mesh 集成）](#98-chaos-engineeringchaos-mesh-集成)
 14. [Incident Benchmark（故障基准评测）](#99-incident-benchmark故障基准评测)
-15. [Web Dashboard（Streamlit）](#910-web-dashboardstreamlit)
-16. [JudgeX 集成](#10-judgex-集成)
-17. [如何测试](#11-如何测试)
-18. [面试深挖 30 题](#12-面试深挖-30-题)
-19. [文件清单速查](#13-文件清单速查)
+15. [常见面试题](#11-常见面试题)
 
 ---
 
@@ -42,7 +38,7 @@
 │   eBPF kprobe → Ring Buffer → ServiceGraph                   │
 │   → 异常检测 → 根因分析 → 自愈操作                            │
 │   → Prometheus 指标 + MCP Server (:50052)                    │
-│   → gRPC Server (:50051)                                     │
+│                                                              │
 │                                                              │
 │   语言: Go              部署: K3s DaemonSet                   │
 │   功能: 实时 TCP 数据采集、内核级自愈                          │
@@ -124,7 +120,7 @@
 |------|------|--------|
 | 数据平面语言 | Go | eBPF 生态 Go 最好（cilium/ebpf），性能好 |
 | 认知平面语言 | Python | LLM/因果发现/ML 生态都在 Python |
-| 通信协议 | MCP | 标准化 JSON-RPC 2.0，比 gRPC 更简单、SSE 推送 |
+| 通信协议 | MCP | 标准化 JSON-RPC 2.0 over HTTP SSE |
 | 认知架构 | Supervisor + 5 Agents | 模块化，每步可独立升级 |
 | 路由逻辑 | 状态驱动 | 检查缺什么就补什么，而非固定流水线 |
 | LLM 诊断 | 可回退 | LLM 不可用时走启发式算法 |
@@ -142,7 +138,7 @@
 | `bpf/net_trace.c` | kprobe/kretprobe `tcp_sendmsg` | TCP 延迟采集 |
 | `bpf/tcp_conntrack.c` | kprobe `tcp_connect` / `tcp_close` | 连接持续时间 |
 | `bpf/tc_drop.c` | TC ingress | 内核级丢包限流 |
-| `bpf/http_probe.c` | uprobe Go HTTP/gRPC | 协议级解析 |
+| `bpf/http_probe.c` | uprobe Go HTTP | 协议级解析 |
 
 ### 3.2 异常检测
 
@@ -189,9 +185,8 @@
 ```
 aetherops/
 ├── __init__.py
-├── main.py                       # 守护进程入口（MCP/gRPC 双通道）
+├── main.py                       # 守护进程入口（MCP）
 ├── demo.py                       # 3 分钟演示脚本
-├── dashboard.py                  # Streamlit 可视化仪表盘
 │
 ├── core/
 │   ├── mcp_client.py             # ★ MCP 客户端（与 Go 数据面通信）
@@ -200,9 +195,8 @@ aetherops/
 │   ├── causal_inference.py       # LPCMCI 因果发现
 │   ├── alert_correlation.py      # 告警关联与去重
 │   ├── feedback.py               # 反馈循环与审计日志
-│   ├── risk_client.py            # 风险评估客户端
+│   ├── risk_client.py            # 风险评估客户端（MCP）
 │   ├── metrics_fetcher.py        # Prometheus 指标采集
-│   └── grpc_client.py            # gRPC 客户端（备选通信）
 │
 ├── workflows/
 │   └── workflow.py                 # ★ Supervisor + 5 Agent 工作流
@@ -220,10 +214,6 @@ aetherops/
 │   └── run.py                    # 命令行入口
 │
 ├── dspy/
-│   └── optimizer.py              # DSPy Prompt 优化
-│
-└── proto/
-    └── aetherops_pb2*.py         # 生成的 protobuf 代码
 ```
 
 ### 4.2 关键文件职责
@@ -236,7 +226,6 @@ aetherops/
 | `causal_inference.py` | ⭐⭐⭐⭐ | LPCMCI 因果发现 |
 | `alert_correlation.py` | ⭐⭐⭐⭐ | 告警关联去重 |
 | `demo.py` | ⭐⭐⭐⭐ | 演示 + 快速验证 |
-| `workflow.yaml` | ⭐⭐⭐ | 已删除，配置逻辑直接编码在 Python 代码中 |
 
 ### 4.3 AetherOps 工作流状态
 
@@ -282,21 +271,12 @@ MCP（Model Context Protocol）是 Anthropic 推出的标准化 AI 工具协议�
 - **HTTP 是浏览器获取网页的协议**
 - **MCP 是 AI 获取工具/数据的协议**
 
-### 5.2 MCP vs gRPC 对比
+### 5.2 MCP 协议详解
 
-| 维度 | MCP | gRPC（本项目的旧方案） |
-|------|-----|----------------------|
-| 传输 | HTTP + SSE | HTTP/2 |
-| 序列化 | JSON（人类可读） | Protobuf（二进制） |
-| 接口定义 | 运行时 tools/list | `.proto` 文件 |
-| 流式推送 | SSE 原生支持 | 需要 Streaming API |
-| 工具发现 | 自动（tools/list） | 手动维护 |
-| 复杂度 | 低 | 高（代码生成、编译） |
-
-**为什么从 gRPC 切到 MCP？**
-1. **不需要 proto 文件编译**：Go 改一个字段，Python 不需要重新生成
-2. **工具自发现**：`tools/list` 返回所有可用工具，对新工具自动适配
-3. **SSE 推送**：Go 端可以直接推送异常事件到 Python 端
+**为什么选择 MCP？**
+1. **工具自发现**：`tools/list` 返回所有可用工具，对新工具自动适配
+2. **SSE 推送**：Go 端可以直接推送异常事件到 Python 端
+3. **零代码生成**：无需 proto 编译，Go 改一个字段 Python 不需要重新生成
 4. **行业标准**：MCP 正在成为 AI 工具协议的事实标准
 
 ### 5.3 MCP 协议流程
@@ -397,7 +377,7 @@ def run_async(coro):
 - MCP 基于 JSON-RPC 2.0（不是 REST，不是 GraphQL）
 - SSE（Server-Sent Events）是单向推送，比 WebSocket 轻量
 - `tools/list` 让客户端动态发现服务端能力，不需要客户端预知
-- 本项目 MCP 和 gRPC 可以共存：`AETHEROPS_TRANSPORT=mcp|grpc` 切换
+- 本项目使用 MCP 作为唯一通信协议
 
 ---
 
@@ -1146,35 +1126,6 @@ python -m aetherops.benchmark.run --save benchmark_results
 
 ---
 
-## 9.10 Web Dashboard（Streamlit）
-
-### 9.10.1 概述
-
-Streamlit 可视化仪表盘，展示架构图、工作流追踪、MTTR 报告、基准评测结果、告警关联、反馈统计。主要用于 **Demo 演示** 和 **面试展示**。
-
-### 9.10.2 页面
-
-| 页面 | 内容 |
-|------|------|
-| Architecture Overview | 系统架构图（Graphviz）、通信流程、MCP 工具列表 |
-| Agent Workflow Trace | Supervisor 路由追踪表、状态转换图 |
-| MTTR Recovery Report | 恢复报告、MTTR 趋势图 |
-| Benchmark Results | 30 场景准确率、按模式分解、失败分析 |
-| Alert Correlation | 模拟告警流、因果分组展示 |
-| Feedback Statistics | 审批通过率、成功率、拒绝分析 |
-| Run Benchmark | 一键运行基准评测 |
-
-### 9.10.3 启动
-
-```bash
-streamlit run aetherops/dashboard.py
-```
-
-### 9.10.4 面试价值
-
-- 面试时直接打开浏览器展示：5 分钟讲清楚整个系统的全貌
-- 展示"可观测性"思维——系统不仅要工作，还要能被看到在怎么工作
-
 ---
 
 ## 10. JudgeX 集成
@@ -1369,9 +1320,9 @@ A：职责分离。Go 处理实时数据（毫秒级响应），Python 处理复
 
 A：用 MCP 协议（JSON-RPC 2.0 over HTTP SSE）。REST 的问题：工具调用不是 CRUD 操作，不适合用 GET/POST/PUT 语义。REST 需要为每个工具定义 URL 和请求体结构，客户端必须预知服务端的能力。MCP 的 `tools/list` 让客户端动态发现服务端能力——服务端加一个新工具，客户端不用改代码就能用。
 
-**Q3: MCP 和 gRPC 比有什么优缺点？**
+**Q3: 为什么选择 MCP 而不是 gRPC？**
 
-A：MCP 的优势：JSON 人类可读、不需要 proto 编译、SSE 原生推送、工具自发现。劣势：JSON 序列化比 Protobuf 慢、没有强类型约束、没有 gRPC 的负载均衡和双向流。所以项目中保留了两套方案：默认 MCP，环境变量 `AETHEROPS_TRANSPORT=grpc` 可回退。
+A：MCP（Model Context Protocol）是专为 AI 工具调用设计的协议，基于 JSON-RPC 2.0 over HTTP SSE。选择 MCP 的原因：1）工具自发现——Go 端新增工具 Python 端无需改代码；2）SSE 原生推送，适合事件驱动场景；3）JSON 人类可读，调试方便；4）无需 proto 编译步骤，迭代快。项目早期曾调研过 gRPC，但 MCP 更轻量，且正成为 AI 工具协议的事实标准。
 
 ### 12.2 Supervisor 架构
 
@@ -1536,7 +1487,6 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 | `internal/mcp/server.go` | MCP 服务器（JSON-RPC 2.0 over SSE），暴露工具 + 推送事件 |
 | `internal/policy/engine.go` | OPA 风格策略引擎，自愈动作的安全防护 |
 | `internal/blastradius/radius.go` | 爆炸半径评估 + 分级自愈执行 |
-| `internal/grpc/server.go` | gRPC 服务（拓扑查询 + 异常事件流） |
 | `aetherops/core/mcp_client.py` | MCP 客户端，调用 Go 端的 topology/remediation 工具 |
 | `aetherops/core/llm_diagnosis.py` | LLM 诊断（5 种故障模式），回退到启发式算法 |
 | `aetherops/core/multi_turn_diagnosis.py` | 多轮诊断：LLM 可请求更多数据，2 轮内提升置信度（从 3 轮优化） |
@@ -1544,13 +1494,12 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 | `aetherops/core/alert_correlation.py` | 三层告警关联：去重→因果分组→风暴抑制 |
 | `aetherops/core/feedback.py` | 反馈循环：审计日志、审批流程、RollbackAssistant |
 | `aetherops/core/metrics_fetcher.py` | Prometheus 指标采集 |
-| `aetherops/core/risk_client.py` | 风险评估客户端（MCP/gRPC 双通道） |
+| `aetherops/core/risk_client.py` | 风险评估客户端（MCP） |
 | `aetherops/workflows/workflow.py` | Supervisor + 5 Agent 工作流，状态驱动路由 |
 | `aetherops/benchmark/scenarios.py` | 30 个标注故障场景，覆盖 5 种模式 + 边界 |
 | `aetherops/benchmark/evaluator.py` | 评测引擎：跑场景 + 算准确率 + 生成报告 |
 | `aetherops/benchmark/run.py` | 命令行入口：支持 --pattern / --verbose / --save |
 | `aetherops/chaos/engine.py` | Chaos Engine：6 种故障注入，本地模拟 + K8s YAML |
-| `aetherops/dashboard.py` | Streamlit 仪表盘：7 页 Demo + 可视化 |
 | `aetherops/demo.py` | 3 分钟演示脚本，展示完整闭环 |
 | `aetherops/rag/retriever.py` | RAG 检索器，从 Milvus 查询相似历史故障 |
 | `aetherops/rag/store.py` | Milvus 向量存储管理 |
@@ -1581,8 +1530,6 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 │  新增模块：告警关联(三层) / 反馈循环(审计+回退) / Chaos 注入 │
 │                                                           │
 │  基准评测：30 故障场景，LLM 准确率 86.7%，启发式 46.7%      │
-│                                                           │
-│  Web 仪表盘：streamlit run aetherops/dashboard.py          │
 │                                                           │
 │  测试命令：python aetherops_judgex_test.py [--live]        │
 │                                                           │

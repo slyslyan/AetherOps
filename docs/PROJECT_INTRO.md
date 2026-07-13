@@ -17,7 +17,7 @@ AetherOps 是一个 AI 驱动的智能运维 Agent 系统，由**两层架构**�
 | **数据面** | Go 1.24、cilium/ebpf、bpf2go、Prometheus client_golang、client-go |
 | **认知面** | Python 3.11、纯 Python Workflow、causal-learn、DSPy |
 | **AI** | 兼容 OpenAI 协议（DeepSeek V4 Flash / 通义千问等） |
-| **通信** | MCP 协议（主）、gRPC（备选） |
+| **通信** | MCP 协议（JSON-RPC 2.0 over HTTP SSE） |
 | **算法** | EMA 指数移动平均、滑动窗口 P95、反向随机游走（PageRank）、LPCMCI 因果发现 |
 | **存储** | Prometheus（指标） |
 | **部署** | Docker、K3s、Kubernetes DaemonSet/Deployment |
@@ -31,7 +31,7 @@ AetherOps 是一个 AI 驱动的智能运维 Agent 系统，由**两层架构**�
 - **反向随机游走**：PageRank 变体定位级联故障根因
 - **内核级自愈**：eBPF TC 丢包熔断、K8s Pod 自动重启
 - **故障现场保全**：CPU/内存火焰图、goroutine/thread dump、tcpdump
-- **MCP + gRPC 双协议服务**：暴露拓扑、策略、自愈工具
+- **MCP 协议服务**：暴露拓扑、策略、自愈工具
 - **OPA 风格策略引擎**：安全策略防止误操作
 
 ### Python 认知面 (AetherOps)
@@ -107,8 +107,8 @@ docker compose -f docker-compose.aetherops.yml up -d
 ```
 bpf/                 # eBPF C 内核探针
 cmd/tracer/          # Go 数据面入口（App 组装 + 生命周期）
-internal/            # Go 内部包（graph/analysis/policy/mitigation/mcp/grpc…）
+internal/            # Go 内部包（graph/analysis/policy/mitigation/mcp/blastradius…）
 aetherops/           # Python 认知面（Agent 工作流、LLM诊断、因果发现、RAG、Chaos）
-proto/               # gRPC 协议定义
+proto/               # 协议消息定义
 deploy/              # K3s 部署清单
 ```

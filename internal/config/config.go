@@ -32,7 +32,6 @@ type Config struct {
 
 	// ===== 网络地址 =====
 	MetricsAddr string // Prometheus metrics 监听地址（默认 ":2112"）
-	GRPCAddr    string // gRPC 监听地址（默认 ":50051"）
 	MCPAddr     string // MCP HTTP 监听地址（默认 ":50052"）
 
 	// ===== eBPF 探针 =====
@@ -64,7 +63,6 @@ func LoadFromEnv() *Config {
 		TopologyPrintInterval: envInt("CFG_PRINT_INTERVAL", 10),
 		AnalysisInterval:      envInt("CFG_ANALYSIS_INTERVAL", 15),
 		MetricsAddr:           metricsAddr,
-		GRPCAddr:              envStr("CFG_GRPC_ADDR", ":50051"),
 		MCPAddr:               envStr("CFG_MCP_ADDR", ":50052"),
 		HTTPProbeTarget:       envStr("CFG_HTTP_PROBE_TARGET", "/proc/self/exe"),
 		TCDropTTL:             envInt("CFG_TC_DROP_TTL", 5),

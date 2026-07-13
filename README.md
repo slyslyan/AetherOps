@@ -62,13 +62,12 @@
 - **动态基线 & 自适应阈值**：滑动窗口 P95 + EMA 指数移动平均
 - **多维度异常评分**：延迟比率 + 错误率 + 调用量骤降三因子综合打分
 - **反向随机游走根因分析**：PageRank 变体，沿反向调用图传播怀疑度
-- **HTTP/gRPC 协议解析**：uprobe 挂载 `net/http` 和 `grpc.Invoke`
+- **HTTP 协议解析**：uprobe 挂载 `net/http`
 - **内核级自愈**：eBPF TC 程序实现微秒级丢包熔断
 - **K8s Pod 隔离**：client-go 自动重启可疑 Pod
 - **故障现场保留**：CPU 火焰图、堆内存火焰图、goroutine/thread dump、tcpdump 抓包
 - **策略引擎 (Policy Guard)**：OPA 风格安全策略，防止误操作
 - **MCP 协议服务**：通过 MCP (Model Context Protocol) 暴露拓扑查询、爆炸半径评估、策略检查等工具
-- **gRPC 服务**：兼容 gRPC 客户端的拓扑订阅和异常事件流
 - **飞书/钉钉告警**：推送根因摘要和故障现场文件信息
 
 ### Python 认知面 (AetherOps AI Agent)
@@ -243,7 +242,7 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   ├── net_trace.c                 # TCP 延迟探针 (kprobe/tcp_sendmsg)
 │   ├── tcp_conntrack.c             # 连接跟踪 (kprobe/tcp_connect + tcp_close)
 │   ├── tc_drop.c                   # TC 入口丢包程序
-│   ├── http_probe.c                # HTTP/gRPC uprobe
+│   ├── http_probe.c                # HTTP uprobe
 │   └── vmlinux.h                   # 内核类型定义 (CO-RE)
 │
 ├── cmd/tracer/                     # ★ Go 数据面入口
@@ -251,7 +250,7 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   ├── app.go                      # App 结构体: 依赖注入 + 生命周期管理
 │   ├── types.go                    # eBPF 事件结构体 (netEventRaw, connEventRaw, httpEventRaw)
 │   ├── tc_ops.go                   # TC 丢包规则增删 (addDropIP / removeDropIP)
-│   ├── http_probe.go               # HTTP/gRPC uprobe 消费
+│   ├── http_probe.go               # HTTP uprobe 消费
 │   └── *_bpfel.go / *_bpfeb.go     # bpf2go 生成的 eBPF 存根
 │
 ├── internal/                       # ★ Go 内部包 (依赖注入，无全局变量)
@@ -265,12 +264,10 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   ├── blastradius/                #  爆炸半径评估
 │   ├── resolver/                   #  cgroup 服务身份解析
 │   ├── mcp/                        #  ★ MCP 协议服务 (JSON-RPC 2.0 over SSE)
-│   └── grpc/                       #  gRPC 服务 (拓扑/异常事件流)
 │
 ├── aetherops/                      # ★ Python 认知面 (AetherOps)
-│   ├── main.py                     # 守护进程入口 (MCP 双通道)
+│   ├── main.py                     # 守护进程入口 (MCP)
 │   ├── demo.py                     # 3 分钟演示脚本
-│   ├── dashboard.py                # Streamlit 可视化仪表盘
 │   │
 │   ├── core/                       # 核心模块
 │   │   ├── mcp_client.py           # ★ MCP 客户端
@@ -301,9 +298,8 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   ├── dspy/                       # DSPy 优化
 │   │   └── optimizer.py
 │   │
-│   └── proto/                      # gRPC protobuf
 │
-├── proto/                          # gRPC 协议定义
+├── proto/                          # protobuf 消息定义
 │   ├── aetherops.proto
 │   └── gen/                        # 生成的 Go 代码
 │
@@ -324,7 +320,7 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │
 ├── Dockerfile.agent                # Go 数据面容器构建
 ├── docker-compose.aetherops.yml    # 全栈 Docker Compose
-├── proto/aetherops.proto           # gRPC 协议定义
+├── proto/aetherops.proto           # 协议消息定义
 │
 ├── stress.py                       # 压力测试脚本
 └── pprof-demo.go                   # 本地 pprof 测试服务
@@ -338,7 +334,7 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 | **数据面** | Go 1.24, cilium/ebpf, bpf2go, Prometheus client, client-go |
 | **认知面** | Python 3.11, 纯 Python Workflow, DSPy, causal-learn, Prometheus client |
 | **AI** | 兼容 OpenAI 协议 (DeepSeek / 通义千问等), 断路器, 注入防护 |
-| **通信** | MCP 协议 (JSON-RPC 2.0 over HTTP SSE), gRPC (备选) |
+| **通信** | MCP 协议 (JSON-RPC 2.0 over HTTP SSE) |
 | **算法** | EMA, 滑动窗口 P95, 反向随机游走 (PageRank), LPCMCI 因果发现 |
 | **存储** | Prometheus (指标) |
 | **部署** | Docker, K3s, Kubernetes DaemonSet/Deployment, Helm, systemd/docker-compose |
