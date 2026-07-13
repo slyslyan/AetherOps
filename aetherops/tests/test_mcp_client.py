@@ -10,8 +10,9 @@ Usage:
 
 import asyncio
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from aetherops.core.mcp_client import MCPClient, TopologySnapshot
@@ -48,7 +49,9 @@ async def test_connect():
     mock_session.list_tools = AsyncMock()
     mock_session.list_tools.return_value.tools = []
 
-    with patch("aetherops.core.mcp_client.sse_client"), \
+    mock_sse = MagicMock()
+    mock_sse.__aenter__.return_value = (MagicMock(), MagicMock())
+    with patch("aetherops.core.mcp_client.sse_client", return_value=mock_sse), \
          patch("aetherops.core.mcp_client.ClientSession", return_value=mock_session):
         await c.connect()
         assert c._session is not None
@@ -82,7 +85,7 @@ async def test_live_connect(mcp_addr):
     c = MCPClient(mcp_addr)
     try:
         await c.connect()
-    except (ConnectionRefusedError, OSError):
+    except (ConnectionRefusedError, OSError, httpx.ConnectError):
         pytest.skip(f"MCP server not available at {mcp_addr}")
 
     tools = c.list_discovered_tools()
@@ -97,7 +100,7 @@ async def test_live_topology(mcp_addr):
     c = MCPClient(mcp_addr)
     try:
         await c.connect()
-    except (ConnectionRefusedError, OSError):
+    except (ConnectionRefusedError, OSError, httpx.ConnectError):
         pytest.skip(f"MCP server not available at {mcp_addr}")
 
     topo = await c.get_topology(include_healthy=True)
