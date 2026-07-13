@@ -16,7 +16,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-FEEDBACK_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "feedback")
+def _default_feedback_dir() -> str:
+    """Default feedback store directory, overridable via env."""
+    return os.getenv(
+        "AETHEROPS_FEEDBACK_DIR",
+        os.path.join(os.path.expanduser("~"), ".aetherops", "feedback"),
+    )
 
 
 class ApprovalStatus(str, Enum):
@@ -79,7 +84,9 @@ class FeedbackEntry:
 class FeedbackStore:
     """Stores feedback entries and audit logs, with weekly stats."""
 
-    def __init__(self, store_dir: str = FEEDBACK_DIR):
+    def __init__(self, store_dir: str = ""):
+        if not store_dir:
+            store_dir = _default_feedback_dir()
         self.store_dir = store_dir
         os.makedirs(store_dir, exist_ok=True)
         self._entries: Dict[str, FeedbackEntry] = {}

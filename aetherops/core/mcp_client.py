@@ -51,6 +51,19 @@ def get_bg_loop() -> asyncio.AbstractEventLoop:
     return _BG_LOOP
 
 
+def stop_bg_loop():
+    """Stop the background event loop and wait for the thread to finish."""
+    global _BG_LOOP, _BG_THREAD
+    loop = _BG_LOOP
+    thread = _BG_THREAD
+    _BG_LOOP = None
+    _BG_THREAD = None
+    if loop is not None and loop.is_running():
+        loop.call_soon_threadsafe(loop.stop)
+    if thread is not None and thread.is_alive():
+        thread.join(timeout=5)
+
+
 def run_async(coro, loop: Optional[asyncio.AbstractEventLoop] = None):
     """Run an async coroutine synchronously on the background MCP event loop.
 

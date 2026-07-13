@@ -3,6 +3,10 @@ name = "aetherops"
 version = "0.1.0"
 description = "AetherOps — AI-driven intelligent operations agent"
 authors = ["AetherOps Team"]
+packages = [{include = "aetherops"}]
+
+[tool.poetry.scripts]
+aetherops = "aetherops.main:main"
 
 [tool.poetry.dependencies]
 python = "^3.11"
@@ -27,7 +31,23 @@ mcp = "^1.0"
 pytest = "^8.0"
 pytest-asyncio = "^0.25"
 black = "^24.0"
+setuptools = "^83.0.0"
 
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "SIM"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

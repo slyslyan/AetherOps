@@ -8,24 +8,24 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import httpx
-
 from aetherops.core.llm_diagnosis import (
     DIAGNOSIS_SYSTEM_PROMPT,
-    DiagnosisReport,
     _build_diagnosis_prompt,
     _heuristic_diagnosis,
-    _parse_llm_response,
+)
+from aetherops.core.llm_provider import (
+    DiagnosisReport,
+    ProviderFactory,
+    parse_llm_response,
 )
 
 logger = logging.getLogger(__name__)
 
-# Max turns to prevent infinite loops
-MAX_DIAGNOSIS_TURNS = 3
+# Max turns to prevent infinite loops (reduced from 3 to 2 for speed)
+MAX_DIAGNOSIS_TURNS = 2
 
 
 @dataclass
@@ -50,7 +50,7 @@ class MultiTurnResult:
 def diagnose_multi_turn(
     causal_graph: dict,
     anomaly_context: dict,
-    model: str = "deepseek-v4-flash",
+    model: str = "",
     metrics_fetcher=None,
     max_turns: int = MAX_DIAGNOSIS_TURNS,
 ) -> MultiTurnResult:
@@ -64,16 +64,16 @@ def diagnose_multi_turn(
     Args:
         causal_graph: Causal graph from causal discovery.
         anomaly_context: Topology + anomaly event context.
-        model: LLM model name.
+        model: Deprecated, kept for backwards compat. Provider is resolved from env.
         metrics_fetcher: Callable to fetch additional metrics.
         max_turns: Maximum diagnosis turns.
 
     Returns:
         MultiTurnResult with the final refined diagnosis.
     """
-    api_key = os.environ.get("LLM_API_KEY")
-    if not api_key:
-        logger.warning("LLM_API_KEY not set, falling back to heuristic")
+    provider = ProviderFactory.from_env()
+    if provider is None:
+        logger.warning("No LLM provider available, falling back to heuristic")
         report = _heuristic_diagnosis(causal_graph, anomaly_context)
         return MultiTurnResult(
             final_report=report,
@@ -93,7 +93,7 @@ and include a `data_requests` list. Each request should have:
   - "variable": what metric/data you need
   - "service": which service
   - "reason": why it helps
-  - "metric_type": "prometheus" | "topology"
+  - "metric_type": "prometheus" | "topology" | "log"
 
 If you ARE confident (confidence >= 0.7), set data_requests to an empty list.
 
@@ -114,12 +114,16 @@ If you ARE confident (confidence >= 0.7), set data_requests to an empty list.
     }
   ]
 }
-```
 """
-
-    # Build initial user prompt (without data_requests structure)
+    # Build initial user prompt — enhanced with data summary to reduce round-trips
     base_prompt = _build_diagnosis_prompt(causal_graph, anomaly_context)
-    user_prompt = base_prompt + """
+    data_summary = (
+        f"\n\nAvailable data: causal graph ({len(causal_graph.get('edges', []))} edges, "
+        f"{len(causal_graph.get('nodes', []))} variables), "
+        f"topology ({len(anomaly_context.get('topology', {}).get('nodes', []))} nodes, "
+        f"{len(anomaly_context.get('topology', {}).get('edges', []))} edges)."
+    )
+    user_prompt = base_prompt + data_summary + """
 
 IMPORTANT: Follow the Multi-Turn Protocol. If you need more data to be confident,
 include a `data_requests` field. Only give a final diagnosis if confidence >= 0.7.
@@ -138,28 +142,16 @@ include a `data_requests` field. Only give a final diagnosis if confidence >= 0.
             current_prompt += f"\n\n## Additional Data (from previous turn)\n{extra_context}"
         current_prompt += f"\n\n(This is turn {turn}/{max_turns}. Be concise.)"
 
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": current_prompt},
-            ],
-            "max_tokens": 4096,
-            "temperature": 0.3,
-        }
-
         try:
-            resp = httpx.post(
-                os.environ.get("LLM_API_URL", "https://api.deepseek.com/v1/chat/completions"),
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json=payload,
+            raw = provider.chat(
+                system_prompt=system_prompt,
+                user_message=current_prompt,
+                max_tokens=4096,
+                temperature=0.3,
                 timeout=120,
             )
-            resp.raise_for_status()
-            raw = resp.json()["choices"][0]["message"]["content"]
+            if raw is None:
+                raise RuntimeError("provider.chat returned None")
         except Exception as e:
             logger.error("LLM call failed on turn %d: %s", turn, e)
             if reports:
@@ -176,7 +168,7 @@ include a `data_requests` field. Only give a final diagnosis if confidence >= 0.
             )
 
         # Parse response
-        report = _parse_llm_response(raw)
+        report = parse_llm_response(raw)
         reports.append(report)
 
         # Check if LLM requested more data

@@ -1,0 +1,188 @@
+# =============================================================================
+# AetherOps — Global Configuration
+# =============================================================================
+
+# Target namespace for all resources
+namespace: ebpf-system
+
+# Global image settings
+image:
+  registry: ""
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+  tag: latest
+
+# =============================================================================
+# Go eBPF Tracer (DaemonSet)
+# =============================================================================
+tracer:
+  enabled: true
+  image:
+    repository: ebpf-tracer
+    # tag, registry, pullPolicy inherited from global
+
+  # Network interface to attach eBPF programs
+  networkInterface: ens33
+
+  # Node selection
+  nodeSelector: {}
+  tolerations:
+    - operator: Exists
+
+  # ServiceAccount settings
+  serviceAccount:
+    create: true
+    name: ebpf-tracer
+
+  # Resource limits
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "100m"
+    limits:
+      memory: "512Mi"
+      cpu: "500m"
+
+  # All CFG_* tuning parameters (empty = use binary defaults)
+  env:
+    CFG_ANALYSIS_INTERVAL: ""
+    CFG_MITIGATION_COOLDOWN_SEC: ""
+    CFG_MAX_SUSPECTS: ""
+    CFG_PROFILE_DURATION: ""
+    CFG_P95_MULTIPLIER: ""
+    CFG_MIN_LAT_MS: ""
+    CFG_CALL_QPS_DROP_RATIO: ""
+    CFG_CALL_ANOMALY_WEIGHT: ""
+
+  # Non-CFG env vars
+  extraEnv:
+    EBPF_IFACE: ""
+    FEISHU_WEBHOOK: ""
+    HTTP_PROBE_TARGET: ""
+
+  # DaemonSet update strategy
+  updateStrategy:
+    type: RollingUpdate
+
+# =============================================================================
+# Python AetherOps Cognitive Plane (Deployment)
+# =============================================================================
+aetherops:
+  enabled: true
+  image:
+    repository: aetherops-core
+    # tag, registry, pullPolicy inherited from global
+
+  replicas: 1
+
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "512Mi"
+    limits:
+      cpu: "2"
+      memory: "2Gi"
+
+  # LLM configuration
+  llm:
+    apiKey: ""
+    apiURL: "https://api.deepseek.com/v1"
+    model: "deepseek-v4-flash"
+
+  # External service addresses
+  prometheusURL: "http://prometheus:9090"
+  milvusURI: "http://milvus:19530"
+
+  # Transport to Go data plane
+  transport: mcp
+  mcpAddr: "http://ebpf-tracer:50052"
+  grpcAddr: "ebpf-tracer:50051"
+
+  # Anomaly detection tuning
+  anomalyMinScore: "0.5"
+  alertWindowSeconds: "60"
+  alertStormThreshold: "20"
+
+  # Node selection
+  nodeSelector: {}
+  tolerations: []
+
+  # Service
+  service:
+    port: 9091
+
+# =============================================================================
+# Neo4j (Dependency Graph)
+# =============================================================================
+neo4j:
+  enabled: true
+
+  image:
+    repository: neo4j
+    tag: 5-community
+    registry: ""
+
+  auth:
+    username: neo4j
+    password: aetherops
+
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1"
+
+  persistence:
+    enabled: true
+    size: 8Gi
+
+  service:
+    boltPort: 7687
+    httpPort: 7474
+
+# =============================================================================
+# Milvus (Vector Store for RAG)
+# =============================================================================
+milvus:
+  enabled: true
+
+  image:
+    repository: milvusdb/milvus
+    tag: v2.5.0
+    registry: ""
+
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "4Gi"
+      cpu: "2"
+
+  persistence:
+    enabled: true
+    size: 20Gi
+
+  service:
+    grpcPort: 19530
+    httpPort: 9092
+
+  etcd:
+    enabled: true
+    image:
+      repository: quay.io/coreos/etcd
+      tag: v3.5
+
+  minio:
+    enabled: true
+    image:
+      repository: minio/minio
+      tag: latest
+    resources:
+      requests:
+        memory: "512Mi"
+        cpu: "200m"
+    persistence:
+      size: 10Gi

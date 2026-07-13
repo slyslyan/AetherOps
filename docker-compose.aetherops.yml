@@ -16,8 +16,6 @@
 # Note: The Go eBPF data plane requires Linux host with eBPF support.
 # On non-Linux hosts, start it separately with `sudo ./ebpf-local`.
 
-version: "3.8"
-
 services:
   # ── AetherOps Python Core ──
   aetherops-core:
@@ -70,7 +68,7 @@ services:
     restart: unless-stopped
 
   etcd:
-    image: quay.io/coreos/etcd:v3.5
+    image: quay.io/coreos/etcd:v3.5.15
     container_name: aetherops-etcd
     environment:
       - ETCD_AUTO_COMPACTION_MODE=revision

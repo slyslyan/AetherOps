@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Dict, List, Optional
 
+from aetherops.workflows.langgraph_workflow import run_workflow
+
 logger = logging.getLogger(__name__)
 
 
@@ -388,7 +390,7 @@ class ChaosValidator:
                         "topology_before": None, "recovery_report": None,
                         "anomaly_detected_at": time.time(),
                     }
-                    result = self.workflow.invoke(initial_state)
+                    result = run_workflow(self.workflow, initial_state)
                     diag = result.get("diagnosis_report", {}) or {}
                     rc_correct = scenario.ground_truth_root_cause in diag.get("root_cause", "")
                     results[-1]["diagnosis"] = {

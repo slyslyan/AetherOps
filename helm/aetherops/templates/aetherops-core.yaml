@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aetherops.core.name" . }}
+  namespace: {{ include "aetherops.namespace" . }}
+  labels:
+    {{- include "aetherops.core.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.aetherops.replicas }}
+  selector:
+    matchLabels:
+      {{- include "aetherops.core.labels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aetherops.core.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: core
+          image: {{ include "aetherops.image" (merge (dict "repository" .Values.aetherops.image.repository "tag" .Values.aetherops.image.tag) .Values.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 9091
+              name: health
+          env:
+            - name: AETHEROPS_TRANSPORT
+              value: {{ .Values.aetherops.transport | quote }}
+            - name: AETHEROPS_MCP_ADDR
+              value: {{ .Values.aetherops.mcpAddr | quote }}
+            - name: AETHEROPS_GRPC_ADDR
+              value: {{ .Values.aetherops.grpcAddr | quote }}
+            - name: PROMETHEUS_URL
+              value: {{ .Values.aetherops.prometheusURL | quote }}
+            - name: MILVUS_URI
+              value: {{ .Values.aetherops.milvusURI | quote }}
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aetherops.core.name" . }}
+                  key: llm_api_key
+                  optional: true
+            - name: LLM_API_URL
+              value: {{ .Values.aetherops.llm.apiURL | quote }}
+            - name: LLM_MODEL
+              value: {{ .Values.aetherops.llm.model | quote }}
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: ANOMALY_MIN_SCORE
+              value: {{ .Values.aetherops.anomalyMinScore | quote }}
+            - name: ALERT_WINDOW_SECONDS
+              value: {{ .Values.aetherops.alertWindowSeconds | quote }}
+            - name: ALERT_STORM_THRESHOLD
+              value: {{ .Values.aetherops.alertStormThreshold | quote }}
+          resources:
+            {{- toYaml .Values.aetherops.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9091
+            initialDelaySeconds: 30
+            periodSeconds: 30
+      {{- if .Values.aetherops.nodeSelector }}
+      nodeSelector:
+        {{- toYaml .Values.aetherops.nodeSelector | nindent 8 }}
+      {{- end }}
+      {{- if .Values.aetherops.tolerations }}
+      tolerations:
+        {{- toYaml .Values.aetherops.tolerations | nindel 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "aetherops.core.name" . }}
+  namespace: {{ include "aetherops.namespace" . }}
+type: Opaque
+stringData:
+  llm_api_key: {{ .Values.aetherops.llm.apiKey | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "aetherops.core.name" . }}
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  ports:
+    - port: {{ .Values.aetherops.service.port }}
+      targetPort: health
+      name: health
+  selector:
+    {{- include "aetherops.core.labels" . | nindent 4 }}

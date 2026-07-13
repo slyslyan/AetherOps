@@ -1,0 +1,30 @@
+[Unit]
+Description=AetherOps eBPF Tracer — Data Plane
+Documentation=https://github.com/aetherops/ebpf-autoheal
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/aetherops-tracer
+Restart=on-failure
+RestartSec=10
+LimitMEMLOCK=infinity
+
+# eBPF capabilities
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_SYS_PTRACE CAP_SYS_ADMIN
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_SYS_PTRACE CAP_SYS_ADMIN
+
+# Environment tuning (override in /etc/default/aetherops-tracer)
+EnvironmentFile=-/etc/default/aetherops-tracer
+Environment=EBPF_IFACE=ens33
+Environment=CFG_P95_MULTIPLIER=1.2
+Environment=CFG_MIN_LAT_MS=10
+Environment=CFG_ANALYSIS_INTERVAL=15
+Environment=CFG_MITIGATION_COOLDOWN_SEC=120
+Environment=CFG_PROFILE_DURATION=10
+Environment=CFG_MAX_SUSPECTS=5
+Environment=LOG_LEVEL=INFO
+
+[Install]
+WantedBy=multi-user.target

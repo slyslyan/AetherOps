@@ -18,15 +18,17 @@ import os
 import signal
 import sys
 import time
+from threading import Thread
 from typing import Optional
 
 import yaml
 
-from aetherops.core.mcp_client import MCPClient, AnomalyEvent
+from aetherops.core.mcp_client import MCPClient, AnomalyEvent, stop_bg_loop
 from aetherops.core.alert_correlation import AlertCorrelator, AlertEvent
 from aetherops.core.feedback import AuditEntry, get_feedback_store
 from aetherops.rag.retriever import build_diagnosis_context, retrieve_similar
-from aetherops.workflows.langgraph_workflow import build_workflow
+from aetherops.workflows.langgraph_workflow import build_workflow, run_workflow
+from aetherops.core.agent_observability import metrics_text, record_workflow_metrics
 
 logging.basicConfig(
     level=logging.INFO,
@@ -48,6 +50,38 @@ class AetherOpsDaemon:
             storm_threshold=int(os.getenv("ALERT_STORM_THRESHOLD", "20")),
         )
         self.feedback = get_feedback_store()
+        self._metrics_server = None
+
+    def _start_metrics_server(self):
+        """Start a lightweight HTTP server for Prometheus metrics scraping."""
+        port = int(os.getenv("AETHEROPS_METRICS_PORT", "9093"))
+        try:
+            from http.server import HTTPServer, BaseHTTPRequestHandler
+
+            class MetricsHandler(BaseHTTPRequestHandler):
+                def do_GET(self):
+                    if self.path == "/metrics":
+                        body = metrics_text().encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain")
+                        self.end_headers()
+                        self.wfile.write(body)
+                    else:
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain")
+                        self.end_headers()
+                        self.wfile.write(b"AetherOps agent metrics endpoint")
+
+                def log_message(self, fmt, *args):
+                    pass  # silence HTTP log
+
+            server = HTTPServer(("0.0.0.0", port), MetricsHandler)
+            thread = Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            self._metrics_server = server
+            logger.info("Metrics server started on :%d/metrics", port)
+        except Exception as e:
+            logger.warning("Metrics server failed to start (%s) — continuing", e)
 
     def _load_config(self, path: str) -> dict:
         with open(path) as f:
@@ -67,6 +101,7 @@ class AetherOpsDaemon:
         self.running = True
 
         min_score = float(os.getenv("ANOMALY_MIN_SCORE", "0.5"))
+        self._start_metrics_server()
         logger.info("AetherOps daemon started (MCP/SSE). Watching for anomalies (min_score=%.2f)...", min_score)
 
         try:
@@ -114,6 +149,7 @@ class AetherOpsDaemon:
         self.running = False
         if self.client:
             self.client.close()
+        stop_bg_loop()
 
     def _handle_anomaly(self, event: AnomalyEvent):
         """Handle a single anomaly event through the diagnosis workflow."""
@@ -148,31 +184,7 @@ class AetherOpsDaemon:
         ))
 
         # Build initial state
-        initial_state = {
-            "anomaly_event": {
-                "node_id": event.node_id,
-                "anomaly_score": event.anomaly_score,
-                "avg_latency_ms": event.avg_latency_ms,
-                "call_count": event.call_count,
-                "suspect_chain": event.suspect_chain,
-                "timestamp_unix_nano": event.timestamp_unix_nano,
-            },
-            "topology_snapshot": None,
-            "metrics_data": None,
-            "causal_graph": None,
-            "causal_method": "LPCMCI",
-            "diagnosis_report": None,
-            "diagnosis_confidence": 0.0,
-            "diagnosis_loop_count": 0,
-            "risk_report": None,
-            "execution_result": None,
-            "completed": False,
-            "workflow_error": None,
-            "next_agent": "topology_analyst",
-            "topology_before": None,
-            "recovery_report": None,
-            "anomaly_detected_at": time.time(),
-        }
+        initial_state = default_diagnosis_state(event)
 
         # Inject RAG context
         try:
@@ -187,7 +199,7 @@ class AetherOpsDaemon:
 
         # Run the workflow
         try:
-            result = self.workflow.invoke(initial_state)
+            result = run_workflow(self.workflow, initial_state)
             logger.info(
                 "Diagnosis pipeline complete. Root cause: %s, Status: %s",
                 result.get("diagnosis_report", {}).get("root_cause", "unknown"),
@@ -197,42 +209,80 @@ class AetherOpsDaemon:
             logger.error("Workflow execution failed: %s", e)
 
 
-def run_single_workflow():
-    """Run a single diagnosis workflow with sample data for testing."""
-    logger.info("Running single diagnosis workflow (demo mode)...")
-    workflow = build_workflow()
-
-    initial_state = {
+def default_diagnosis_state(event: AnomalyEvent) -> dict:
+    """Build the initial LangGraph state for an anomaly event."""
+    return {
         "anomaly_event": {
-            "node_id": "demo-service:8080",
-            "anomaly_score": 85.0,
-            "avg_latency_ms": 2500.0,
-            "call_count": 150,
-            "suspect_chain": ["svc-a", "svc-b", "demo-service:8080"],
-            "timestamp_unix_nano": int(time.time() * 1e9),
+            "node_id": event.node_id,
+            "anomaly_score": event.anomaly_score,
+            "avg_latency_ms": event.avg_latency_ms,
+            "call_count": event.call_count,
+            "suspect_chain": event.suspect_chain,
+            "timestamp_unix_nano": event.timestamp_unix_nano,
         },
+        "anomaly_detected_at": time.time(),
         "topology_snapshot": None,
         "metrics_data": None,
         "causal_graph": None,
-        "causal_method": "PC",
+        "causal_method": "LPCMCI",
         "diagnosis_report": None,
         "diagnosis_confidence": 0.0,
         "diagnosis_loop_count": 0,
+        "critic_feedback": None,
+        "critic_approves": None,
+        "critic_loop_count": 0,
         "risk_report": None,
         "execution_result": None,
         "completed": False,
         "workflow_error": None,
-        "next_agent": "topology_analyst",
+        "plan": None,
+        "plan_step_index": 0,
+        "plan_rationale": None,
+        "next_agent": "supervisor",
         "topology_before": None,
         "recovery_report": None,
-        "anomaly_detected_at": time.time(),
+        "rag_context": None,
+        "trace_spans": [],
     }
 
-    result = workflow.invoke(initial_state)
+
+def run_single_workflow():
+    """Run a single diagnosis workflow with sample data for testing."""
+    logger.info("Running single diagnosis workflow (demo mode)...")
+
+    if not os.getenv("LLM_API_KEY"):
+        logger.warning("LLM_API_KEY not set — LLM diagnosis will fall back to heuristic")
+
+    workflow = build_workflow()
+
+    demo_event = AnomalyEvent(
+        node_id="demo-service:8080",
+        anomaly_score=85.0,
+        avg_latency_ms=2500.0,
+        call_count=150,
+        suspect_chain=["svc-a", "svc-b", "demo-service:8080"],
+        timestamp_unix_nano=int(time.time() * 1e9),
+    )
+    initial_state = default_diagnosis_state(demo_event)
+    initial_state["causal_method"] = "PC"
+
+    _t0 = time.time()
+    result = run_workflow(workflow, initial_state)
+    _duration_ms = (time.time() - _t0) * 1000
+    record_workflow_metrics(_duration_ms)
+
+    spans = result.get("trace_spans", [])
     print("\n=== WORKFLOW RESULT ===")
     print(f"Root cause: {result.get('diagnosis_report', {}).get('root_cause', 'N/A')}")
     print(f"Confidence: {result.get('diagnosis_confidence', 0):.2f}")
     print(f"Execution: {result.get('execution_result', {}).get('status', 'N/A')}")
+    print(f"Duration: {_duration_ms:.0f}ms")
+    print(f"Plan: {result.get('plan', [])}")
+    print(f"Plan rationale: {result.get('plan_rationale', 'N/A')}")
+    if spans:
+        print(f"\nAgent trace ({len(spans)} spans):")
+        for s in spans:
+            print(f"  [{s['status']:5s}] {s['agent']:<22s} {s['duration_ms']:8.1f}ms  {s.get('error', '')}")
     print("=======================\n")
 
 

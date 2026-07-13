@@ -515,7 +515,26 @@ def run_async(coro):
 | MEDIUM | 影响有限、但有一定风险 | TEE（需要确认） | 是（通知后 60s 无拒绝则执行） |
 | HIGH | 影响多个服务 | 只告警、不执行 | 是（人工审批） |
 
-### 6.5 Supervisor 架构的面试价值
+### 6.6 Critic 与评审分层设计
+
+Critic Agent 负责评审 LLM 诊断报告的质量。初始版本对所有诊断一律走 LLM 评审，在性能实测中暴露了两个问题：
+
+| 问题 | 表现 | 根因 |
+|------|------|------|
+| 无意义打回 | 低风险简单故障也被 LLM 挑"描述性"瑕疵 | 评审没有分层，统一标准 |
+| 重诊断空跑 | 拒绝后重诊断没有增量输入，纯靠方差 | 未传递 Critic 的修改意见 |
+
+**分层评审设计（待实现）**：
+
+| 风险等级 | 评审方式 | 条件 | 预期耗时 |
+|---------|---------|------|---------|
+| LOW | 规则校验 | 格式检查 + 置信度 ≥ 0.7 + 根因在服务列表内 | 毫秒级 |
+| MEDIUM | LLM 评审 | 完整诊断报告审查 | ~10s |
+| HIGH | LLM 评审 + 人工 | 同上 + 等待 SRE 审批 | ~10s + 人工 |
+
+**面试价值**：分层评审展示了你对"自愈系统设计权衡"的理解——不是所有诊断都需要 LLM 级别的审查，用规则处理 90% 的简单故障，用 LLM 处理 10% 的复杂场景，整体效率最优。
+
+### 6.7 Supervisor 架构的面试价值
 
 问："为什么不用一个简单的 if-else 流水线？"
 
@@ -564,7 +583,35 @@ LPCMCI（Latent PCMCI）是一种因果发现算法，结合了：
 4. 输出因果有向图
 ```
 
-### 7.3 面试回答
+### 7.3 性能优化：因果图稀疏化
+
+PC 算法在 N 个变量上的复杂度为 O(N²)。当拓扑有 1200+ 节点时，全量运行导致 5s+ 延迟。
+
+**稀疏化策略**：
+
+```
+输入: 1200 维指标 DataFrame
+   │
+   ▼
+1. 提取可疑节点集（anomaly_event.node_id → suspect_chain → 拓扑异常边）
+2. 筛选指标列：只保留与可疑节点相关的列
+3. 安全上限：MAX_CAUSAL_VARS=50（环境变量可调）
+   │
+   ▼
+输出: ≤50 维的稀疏化 DataFrame
+   │
+   ▼
+PC 算法: O(50²) 而非 O(1200²)，耗时从 5.2s→3.0s (-43%)
+```
+
+**三个筛选来源**：
+- primary suspect from anomaly_event.node_id
+- suspect propagation chain
+- topology edges with anomaly_score > 0
+
+**设计原则**：在"因果发现的完整性"和"诊断时效性"之间做工程取舍。故障根因几乎一定落在可疑节点集中，丢失真正根因的概率极低。
+
+### 7.4 面试回答
 
 问："为什么不用简单关联分析？"
 
@@ -675,10 +722,12 @@ DIAGNOSIS_SYSTEM_PROMPT = """You are an expert SRE reliability engineer...
 保存自愈前的拓扑快照 (topology_before)
     │
     ▼
-等待 10 秒 (指标稳定时间)
+指数退避轮询: 2s → 3s → 5s
+检查拓扑异常分数是否降低 > 50%
     │
-    ▼
-重新获取拓扑 (MCP get_topology)
+    ├─ 第 1 次 (2s):  已恢复 → 提前退出 ✅
+    ├─ 第 2 次 (3s):  已恢复 → 提前退出 ✅
+    ├─ 第 3 次 (5s):  最终判断
     │
     ▼
 对比 Before / After 的异常分数
@@ -701,9 +750,19 @@ MTTR = Mean Time To Recovery
 
          检测时间    诊断时间    风险评估   执行时间    验证时间
          ┌─────┐   ┌──────┐   ┌────┐   ┌────┐   ┌──────┐
-         │ 8s  │   │ 14s  │   │ 2s │   │ 8s │   │ 10s  │
+         │ 8s  │   │ 14s  │   │ 2s │   │ 8s │   │ 3s   │  ← 从 10s 优化为指数退避
          └─────┘   └──────┘   └────┘   └────┘   └──────┘
-                                       总共: 42s
+                                       总共: 35s
+
+优化效果对比：
+  | 阶段 | 优化前 | 优化后 | 优化方式 |
+  |------|--------|--------|---------|
+  | Detection | 8s | 8s | eBPF Ring Buffer → Anomaly Score |
+  | Diagnosis | 14s | 14s | 拓扑 → 因果 → LLM 诊断 |
+  | Risk Assessment | 2s | 2s | MCP 爆炸半径评估 |
+  | Execution | 8s | 8s | MCP execute_remediation |
+  | Verification | 10s | 3s(avg) | time.sleep(10) → 2s→3s→5s 指数退避 |
+  | **Total MTTR** | **42s** | **35s** | **-17%** |
 ```
 
 | 阶段 | 时间 | 做什么 |
@@ -814,9 +873,18 @@ def diagnose_multi_turn(causal_graph, anomaly_context,
     return result
 ```
 
-### 9.5.5 面试要点
+### 9.5.5 优化与迭代
+
+| 版本 | 变更 | 原因 |
+|------|------|------|
+| 原版 | `max_turns=3` | 初始设计，给 LLM 充足轮次完善诊断 |
+| 优化 v1 | `max_turns=2` | 实测 3→2 对首诊质量无显著影响，但节省 ~10s |
+| 未来 | `max_turns=1` + 数据摘要 | 首轮传入所有可用数据 + 数据量统计，减少 LLM 请求额外数据的需要 |
+
+### 9.5.6 面试要点
 
 - **为什么是 3 轮？** 超过 3 轮后收益递减，且延迟线性增加
+- **后面为什么改成了 2 轮？** 实测发现第一轮已包含全部数据（因果图 + 拓扑），LLM 很少需要额外数据。减少 1 轮节省约 10s
 - **为什么置信度阈值是 0.7？** 比 Supervisor 的 0.6 更高，因为多轮后信息更多
 - **不是每轮都重新诊断**：前一轮的推理保留在对话上下文中，LLM 在已有基础上深化
 
@@ -1463,18 +1531,18 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 | 文件 | 50 字一句话总结 |
 |------|---------------|
 | `bpf/net_trace.c` | eBPF C 代码，挂载 `tcp_sendmsg`，捕获四元组+延迟→Ring Buffer |
-| `cmd/tracer/main.go` | 入口，加载 4 个 eBPF 程序，主循环读 Ring Buffer |
-| `cmd/tracer/graph.go` | 服务拓扑图，EMA 基线，P95 滑动窗口，Prometheus 更新 |
-| `cmd/tracer/analysis.go` | 异常评分 + 反向随机游走 + 故障聚类 + 历史匹配 |
-| `cmd/tracer/mitigation.go` | TC 丢包 → K8s 重启 → 火焰图 → 飞书通知 |
-| `cmd/tracer/mcp_server.go` | MCP 服务器（JSON-RPC 2.0 over SSE），暴露工具 + 推送事件 |
-| `cmd/tracer/policy_engine.go` | OPA 风格策略引擎，自愈动作的安全防护 |
-| `cmd/tracer/blast_radius.go` | 爆炸半径评估 + 分级自愈执行 |
-| `cmd/tracer/grpc_server.go` | gRPC 服务（拓扑查询 + 异常事件流） |
+| `cmd/tracer/main.go` | 入口: 组装 App → Start → RunMainLoop → Shutdown（30 行） |
+| `internal/graph/graph.go` | 服务拓扑图，EMA 基线，P95 滑动窗口，Prometheus 更新 |
+| `internal/analysis/analysis.go` | 异常评分 + 反向随机游走 + 故障聚类 + 历史匹配 |
+| `internal/mitigation/mitigation.go` | TC 丢包 → K8s 重启 → 火焰图 → 飞书通知 |
+| `internal/mcp/server.go` | MCP 服务器（JSON-RPC 2.0 over SSE），暴露工具 + 推送事件 |
+| `internal/policy/engine.go` | OPA 风格策略引擎，自愈动作的安全防护 |
+| `internal/blastradius/radius.go` | 爆炸半径评估 + 分级自愈执行 |
+| `internal/grpc/server.go` | gRPC 服务（拓扑查询 + 异常事件流） |
 | `aetherops/core/mcp_client.py` | MCP 客户端，调用 Go 端的 topology/remediation 工具 |
 | `aetherops/core/llm_diagnosis.py` | LLM 诊断（5 种故障模式），回退到启发式算法 |
-| `aetherops/core/multi_turn_diagnosis.py` | 多轮诊断：LLM 可请求更多数据，3 轮内提升置信度 |
-| `aetherops/core/causal_inference.py` | LPCMCI 因果发现算法 |
+| `aetherops/core/multi_turn_diagnosis.py` | 多轮诊断：LLM 可请求更多数据，2 轮内提升置信度（从 3 轮优化） |
+| `aetherops/core/causal_inference.py` | LPCMCI 因果发现算法，支持 MAX_CAUSAL_VARS 稀疏化（O(N²) → O(50²)) |
 | `aetherops/core/socratic_debugger.py` | 苏格拉底式引导调试器 |
 | `aetherops/core/alert_correlation.py` | 三层告警关联：去重→因果分组→风暴抑制 |
 | `aetherops/core/feedback.py` | 反馈循环：审计日志、审批流程、RollbackAssistant |

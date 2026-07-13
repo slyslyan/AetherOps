@@ -1,0 +1,18 @@
+[Unit]
+Description=AetherOps Core — Cognitive Plane
+Documentation=https://github.com/aetherops/ebpf-autoheal
+After=docker.service network-online.target
+Wants=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/docker-compose -f /opt/aetherops/docker-compose.aetherops.yml up -d
+ExecStop=/usr/local/bin/docker-compose -f /opt/aetherops/docker-compose.aetherops.yml down
+Restart=no
+
+# LLM config (override in /etc/default/aetherops-core)
+EnvironmentFile=-/etc/default/aetherops-core
+
+[Install]
+WantedBy=multi-user.target

@@ -106,7 +106,8 @@ docker compose -f docker-compose.aetherops.yml up -d
 
 ```
 bpf/                 # eBPF C 内核探针
-cmd/tracer/          # Go 数据面（eBPF加载、拓扑、分析、自愈、MCP/gRPC服务）
+cmd/tracer/          # Go 数据面入口（App 组装 + 生命周期）
+internal/            # Go 内部包（graph/analysis/policy/mitigation/mcp/grpc…）
 aetherops/           # Python 认知面（Agent 工作流、LLM诊断、因果发现、RAG、Chaos）
 proto/               # gRPC 协议定义
 deploy/              # K3s 部署清单

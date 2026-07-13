@@ -1,0 +1,198 @@
+{{- if .Values.milvus.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd
+  template:
+    metadata:
+      labels:
+        app: etcd
+    spec:
+      containers:
+        - name: etcd
+          image: {{ include "aetherops.image" (merge (dict "repository" .Values.milvus.etcd.image.repository "tag" .Values.milvus.etcd.image.tag) .Values.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: ETCD_AUTO_COMPACTION_MODE
+              value: revision
+            - name: ETCD_AUTO_COMPACTION_RETENTION
+              value: "1000"
+            - name: ETCD_QUOTA_BACKEND_BYTES
+              value: "4294967296"
+          command:
+            - etcd
+            - --advertise-client-urls=http://0.0.0.0:2379
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --data-dir=/etcd
+          volumeMounts:
+            - name: data
+              mountPath: /etcd
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  ports:
+    - port: 2379
+  selector:
+    app: etcd
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: {{ include "aetherops.image" (merge (dict "repository" .Values.milvus.minio.image.repository "tag" .Values.milvus.minio.image.tag) .Values.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 9000
+              name: api
+            - containerPort: 9001
+              name: console
+          env:
+            - name: MINIO_ROOT_USER
+              value: minioadmin
+            - name: MINIO_ROOT_PASSWORD
+              value: minioadmin
+          command:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          resources:
+            {{- toYaml .Values.milvus.minio.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          {{- if .Values.milvus.minio.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: minio-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  ports:
+    - port: 9000
+      name: api
+    - port: 9001
+      name: console
+  selector:
+    app: minio
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: milvus
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: milvus
+  template:
+    metadata:
+      labels:
+        app: milvus
+    spec:
+      containers:
+        - name: milvus
+          image: {{ include "aetherops.image" (merge (dict "repository" .Values.milvus.image.repository "tag" .Values.milvus.image.tag "registry" .Values.milvus.image.registry) .Values.image) }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.milvus.service.grpcPort }}
+              name: grpc
+            - containerPort: {{ .Values.milvus.service.httpPort }}
+              name: http
+          env:
+            - name: ETCD_ENDPOINTS
+              value: etcd:2379
+            - name: MINIO_ADDRESS
+              value: minio:9000
+          resources:
+            {{- toYaml .Values.milvus.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/milvus
+      volumes:
+        - name: data
+          {{- if .Values.milvus.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: milvus-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: milvus
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  ports:
+    - port: {{ .Values.milvus.service.grpcPort }}
+      targetPort: grpc
+      name: grpc
+    - port: {{ .Values.milvus.service.httpPort }}
+      targetPort: http
+      name: http
+  selector:
+    app: milvus
+{{- if .Values.milvus.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: milvus-data
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.milvus.persistence.size }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: minio-data
+  namespace: {{ include "aetherops.namespace" . }}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.milvus.minio.persistence.size }}
+{{- end }}
+{{- end }}

@@ -70,7 +70,7 @@ class BenchmarkEvaluator:
         """Run all scenarios through the workflow and report accuracy."""
         if not self.workflow:
             try:
-                from aetherops.workflows.langgraph_workflow import build_workflow
+                from aetherops.workflows.langgraph_workflow import build_workflow, run_workflow
                 self.workflow = build_workflow()
                 logger.info("Auto-loaded workflow for benchmark")
             except Exception:
@@ -137,7 +137,7 @@ class BenchmarkEvaluator:
             }
 
             try:
-                result_state = self.workflow.invoke(initial_state)
+                result_state = run_workflow(self.workflow, initial_state)
                 elapsed = time.time() - start
             except Exception as e:
                 elapsed = time.time() - start
@@ -357,7 +357,7 @@ def run_benchmark(workflow=None, verbose: bool = True) -> Tuple[BenchmarkReport,
     from aetherops.benchmark.scenarios import SCENARIOS
 
     if workflow is None:
-        from aetherops.workflows.langgraph_workflow import build_workflow
+        from aetherops.workflows.langgraph_workflow import build_workflow, run_workflow
         workflow = build_workflow()
 
     evaluator = BenchmarkEvaluator(workflow=workflow)

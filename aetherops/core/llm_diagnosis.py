@@ -10,23 +10,27 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from dataclasses import dataclass, field
 from typing import List, Optional
 
-import httpx
+from aetherops.core.llm_provider import (
+    DiagnosisReport,
+    LLMProvider,
+    ProviderFactory,
+)
 
 logger = logging.getLogger(__name__)
 
+# Heuristic fallback counter — incremented when LLM is unavailable or fails
+_heuristic_fallback_count = 0
 
-@dataclass
-class DiagnosisReport:
-    root_cause: str
-    confidence: float
-    explanation: str
-    affected_services: List[str]
-    recommended_actions: List[dict]
-    raw_llm_response: str = ""
+
+def _count_heuristic_fallback():
+    global _heuristic_fallback_count
+    _heuristic_fallback_count += 1
+    logger.warning(
+        "LLM unavailable, using heuristic diagnosis (fallback #%d)",
+        _heuristic_fallback_count,
+    )
 
 
 # Default system prompt for the diagnosis agent.
@@ -109,77 +113,54 @@ Return a JSON object with:
 def diagnose(
     causal_graph: dict,
     anomaly_context: dict,
-    model: str = "deepseek-v4-flash",
+    provider: Optional[LLMProvider] = None,
     include_screenshots: bool = False,
     screenshot_paths: Optional[List[str]] = None,
 ) -> DiagnosisReport:
     """
     Run LLM diagnosis on the causal graph and anomaly context.
 
+    Uses the injected ``provider``; falls back to ``ProviderFactory.from_env()``.
+    If no provider is available, runs heuristic diagnosis.
+
     Args:
         causal_graph: Dict with nodes, edges from causal discovery.
         anomaly_context: Dict with topology snapshot, anomaly events, metrics.
-        model: LLM model identifier.
+        provider: Optional LLMProvider instance. If None, auto-create from env.
         include_screenshots: If True, include base64-encoded Grafana screenshots.
         screenshot_paths: Paths to screenshot images.
 
     Returns:
         DiagnosisReport with root cause analysis.
     """
-    api_key = os.environ.get("LLM_API_KEY")
-    if not api_key:
-        logger.warning("LLM_API_KEY not set, returning heuristic diagnosis")
+    if provider is None:
+        provider = ProviderFactory.from_env()
+
+    if provider is None:
+        _count_heuristic_fallback()
         return _heuristic_diagnosis(causal_graph, anomaly_context)
 
     # Build the prompt payload.
     user_message = _build_diagnosis_prompt(causal_graph, anomaly_context)
 
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": DIAGNOSIS_SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
-        ],
-        "max_tokens": 4096,
-        "temperature": 0.3,
-    }
-
-    # If multi-modal is enabled and screenshots exist, add image content.
+    # If multi-modal is enabled and screenshots exist, build rich content.
+    final_user_message = user_message
     if include_screenshots and screenshot_paths:
         from .screenshot_utils import encode_screenshots
 
         image_content = encode_screenshots(screenshot_paths)
-        user_message_with_images = [
+        final_user_message = json.dumps([
             {"type": "text", "text": user_message},
             *[{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}}
               for img in image_content],
-        ]
-        payload["messages"][1] = {
-            "role": "user",
-            "content": user_message_with_images,
-        }
+        ])
 
-    try:
-        resp = httpx.post(
-            os.environ.get("LLM_API_URL", "https://api.deepseek.com/v1/chat/completions"),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=120,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-        raw = result["choices"][0]["message"]["content"]
-        return _parse_llm_response(raw)
+    report = provider.diagnose(DIAGNOSIS_SYSTEM_PROMPT, final_user_message)
+    if report is not None:
+        return report
 
-    except httpx.TimeoutException:
-        logger.error("LLM request timed out after 120s")
-        return _heuristic_diagnosis(causal_graph, anomaly_context)
-    except Exception as e:
-        logger.error("LLM diagnosis failed: %s", e)
-        return _heuristic_diagnosis(causal_graph, anomaly_context)
+    _count_heuristic_fallback()
+    return _heuristic_diagnosis(causal_graph, anomaly_context)
 
 
 def _build_diagnosis_prompt(causal_graph: dict, anomaly_context: dict) -> str:
@@ -194,39 +175,6 @@ def _build_diagnosis_prompt(causal_graph: dict, anomaly_context: dict) -> str:
         "Please analyze and return a structured diagnosis report as JSON.",
     ]
     return "\n".join(sections)
-
-
-def _parse_llm_response(raw: str) -> DiagnosisReport:
-    """Parse LLM response into a structured DiagnosisReport."""
-    # Try to extract JSON from the response.
-    try:
-        # Find JSON block (between triple backticks or first { to last }).
-        if "```json" in raw:
-            json_str = raw.split("```json")[1].split("```")[0].strip()
-        elif "```" in raw:
-            json_str = raw.split("```")[1].split("```")[0].strip()
-        else:
-            json_str = raw[raw.find("{") : raw.rfind("}") + 1]
-
-        data = json.loads(json_str)
-        return DiagnosisReport(
-            root_cause=data.get("root_cause", "unknown"),
-            confidence=data.get("confidence", 0.5),
-            explanation=data.get("explanation", ""),
-            affected_services=data.get("affected_services", []),
-            recommended_actions=data.get("recommended_actions", []),
-            raw_llm_response=raw,
-        )
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.warning("Failed to parse LLM response as JSON: %s", e)
-        return DiagnosisReport(
-            root_cause="unknown",
-            confidence=0.0,
-            explanation=raw,
-            affected_services=[],
-            recommended_actions=[],
-            raw_llm_response=raw,
-        )
 
 
 def _heuristic_diagnosis(causal_graph: dict, anomaly_context: dict) -> DiagnosisReport:

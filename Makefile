@@ -12,7 +12,7 @@ APP_NAME   := ebpf-local
 CMD_DIR    := ./cmd/tracer/
 OUTPUT     := ./$(APP_NAME)
 
-.PHONY: generate build run test clean help
+.PHONY: generate build run test clean fmt lint help
 
 help:
 	@echo "AetherOps Build Targets:"
@@ -20,6 +20,8 @@ help:
 	@echo "  make build      — Generate + build Go binary"
 	@echo "  make run        — Local run (SIMULATE_LATENCY=1, needs sudo)"
 	@echo "  make test       — Run Go tests"
+	@echo "  make fmt        — Format Go source code"
+	@echo "  make lint       — Run Go vet + staticcheck (if installed)"
 	@echo "  make clean      — Remove build artifacts"
 	@echo "  make help       — Show this help"
 
@@ -38,10 +40,20 @@ run: build
 
 test:
 	@echo "✦ Running tests..."
-	go test -v $(CMD_DIR)...
+	go test -v ./internal/...
+
+fmt:
+	@echo "✦ Formatting Go source..."
+	go fmt ./...
+
+lint:
+	@echo "✦ Running go vet..."
+	go vet ./...
+	@echo "✦ Running staticcheck (if installed)..."
+	command -v staticcheck >/dev/null && staticcheck ./... || echo "(staticcheck not installed, skipping)"
 
 clean:
 	@echo "✦ Cleaning build artifacts..."
-	rm -f $(OUTPUT) tracer tracer-mcp
+	rm -f $(OUTPUT)
 	rm -f cmd/tracer/*.o
 	@echo "✓ Clean complete"

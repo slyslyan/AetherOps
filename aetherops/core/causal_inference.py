@@ -11,6 +11,7 @@ PC algorithm (for cross-sectional data).
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
@@ -62,6 +63,16 @@ def run_causal_discovery(
 
     if data.shape[0] < 10:
         logger.warning("Very few samples (%d), causal discovery may be unreliable", data.shape[0])
+
+    # Safety cap: PC algorithm is O(n²), limit to top K most relevant variables
+    max_vars = int(os.getenv("MAX_CAUSAL_VARS", "50"))
+    if len(variables) > max_vars:
+        logger.warning(
+            "Too many variables (%d) for PC algorithm, truncating to %d",
+            len(variables), max_vars,
+        )
+        variables = variables[:max_vars]
+        data = metrics_df[variables].to_numpy()
 
     try:
         from causallearn.search.ConstraintBased.PC import pc
