@@ -270,8 +270,9 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   └── *_bpfel.go / *_bpfeb.go     # bpf2go 生成的 eBPF 存根
 │
 ├── internal/                       # ★ Go 内部包 (依赖注入，无全局变量)
+│   ├── errors/                     #  哨兵错误 (sentinel errors)
 │   ├── config/                     #  配置: Config → LoadFromEnv() → Validate()
-│   ├── metrics/                    #  Prometheus 指标 (带基数守卫)
+│   ├── metrics/                    #  Prometheus 指标
 │   ├── graph/                      #  服务拓扑图: ServiceGraph, Node, Edge, EMA/P95
 │   ├── analysis/                   #  根因分析: 反向随机游走 + 历史匹配 + 聚类
 │   ├── policy/                     #  OPA 风格策略引擎
@@ -295,7 +296,6 @@ sudo bash deploy/nonk8s/install.sh --core-only --llm-api-key sk-xxx
 │   │   ├── causal_inference.py     # LPCMCI 因果发现
 │   │   ├── agent_observability.py  # Span 追踪 + Prometheus 指标
 │   │   ├── risk_client.py          # 风险评估客户端
-│   │   ├── socratic_debugger.py    # 苏格拉底式调试器
 │   │   ├── feedback.py             # 反馈循环与审计
 │   │   └── metrics_fetcher.py      # Prometheus 指标采集
 │   │

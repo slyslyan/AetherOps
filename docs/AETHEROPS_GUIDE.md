@@ -201,7 +201,6 @@ aetherops/
 │   ├── causal_inference.py       # LPCMCI 因果发现
 │   ├── alert_correlation.py      # 告警关联与去重
 │   ├── feedback.py               # 反馈循环与审计日志
-│   ├── socratic_debugger.py      # 苏格拉底式引导调试
 │   ├── risk_client.py            # 风险评估客户端
 │   ├── metrics_fetcher.py        # Prometheus 指标采集
 │   └── grpc_client.py            # gRPC 客户端（备选通信）
@@ -1508,7 +1507,7 @@ A：位置加在 Risk Assessor 后面。从 Milvus 检索近 30 天的故障记�
 
 **Q27: 如果 JudgeX 有 1000 个微服务，当前的架构还能工作吗？**
 
-A：Go 数据平面面临的主要问题是"标签基数爆炸"——1000 个服务理论上 N² = 100 万条边。需求已经做了标签基数保护（上限 100 个标签组合）。对于 Python 侧，因果发现的计算复杂度是 O(N²)，1000 个服务会导致计算时间过长。优化方向：先做拓扑剪枝，只分析有异常的边。或者分层分析——先分析服务组（namespace），定位到组再分析组内。
+A：Go 数据平面面临的主要问题是"标签基数爆炸"——1000 个服务理论上 N² = 100 万条边。目前通过 Prometheus 原生标签机制控制，后续可加采样或聚合降低基数。对于 Python 侧，因果发现的计算复杂度是 O(N²)，1000 个服务会导致计算时间过长。优化方向：先做拓扑剪枝，只分析有异常的边。或者分层分析——先分析服务组（namespace），定位到组再分析组内。
 
 **Q28: Supervisor 单点故障怎么解决？**
 
@@ -1543,7 +1542,6 @@ A：Go 这边的 eBPF 开发最坑的三个问题（IPv6 双栈导致 IP 全 0�
 | `aetherops/core/llm_diagnosis.py` | LLM 诊断（5 种故障模式），回退到启发式算法 |
 | `aetherops/core/multi_turn_diagnosis.py` | 多轮诊断：LLM 可请求更多数据，2 轮内提升置信度（从 3 轮优化） |
 | `aetherops/core/causal_inference.py` | LPCMCI 因果发现算法，支持 MAX_CAUSAL_VARS 稀疏化（O(N²) → O(50²)) |
-| `aetherops/core/socratic_debugger.py` | 苏格拉底式引导调试器 |
 | `aetherops/core/alert_correlation.py` | 三层告警关联：去重→因果分组→风暴抑制 |
 | `aetherops/core/feedback.py` | 反馈循环：审计日志、审批流程、RollbackAssistant |
 | `aetherops/core/metrics_fetcher.py` | Prometheus 指标采集 |
