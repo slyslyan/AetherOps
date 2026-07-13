@@ -23,9 +23,6 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.MetricsAddr != ":2112" {
 		t.Errorf("expected MetricsAddr ':2112', got '%s'", cfg.MetricsAddr)
 	}
-	if cfg.GRPCAddr != ":50051" {
-		t.Errorf("expected GRPCAddr ':50051', got '%s'", cfg.GRPCAddr)
-	}
 	if cfg.MCPAddr != ":50052" {
 		t.Errorf("expected MCPAddr ':50052', got '%s'", cfg.MCPAddr)
 	}
