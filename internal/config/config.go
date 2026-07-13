@@ -39,9 +39,6 @@ type Config struct {
 	HTTPProbeTarget string // uprobe 目标二进制路径（默认 "/proc/self/exe"）
 	TCDropTTL       int    // TC drop 规则 TTL（分钟，默认 5）
 
-	// ===== 标签基数保护 =====
-	LabelGuardEnabled bool // 是否启用标签基数保护（默认 true）
-	LabelGuardMax     int  // 最大唯一标签组合数（默认 100）
 }
 
 // LoadFromEnv 从环境变量加载配置。
@@ -71,8 +68,6 @@ func LoadFromEnv() *Config {
 		MCPAddr:               envStr("CFG_MCP_ADDR", ":50052"),
 		HTTPProbeTarget:       envStr("CFG_HTTP_PROBE_TARGET", "/proc/self/exe"),
 		TCDropTTL:             envInt("CFG_TC_DROP_TTL", 5),
-		LabelGuardEnabled:     envInt("CFG_LABEL_GUARD_ENABLED", 1) == 1,
-		LabelGuardMax:         envInt("CFG_LABEL_GUARD_MAX", 100),
 	}
 }
 
@@ -99,9 +94,6 @@ func (c *Config) Validate() error {
 	}
 	if c.AnalysisInterval <= 0 {
 		errs = append(errs, "AnalysisInterval must be positive")
-	}
-	if c.LabelGuardMax <= 0 {
-		errs = append(errs, "LabelGuardMax must be positive")
 	}
 	if len(errs) > 0 {
 		return fmt.Errorf("invalid config (%s): %w", join(errs, "; "), apperrors.ErrInvalidConfig)

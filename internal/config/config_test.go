@@ -20,12 +20,6 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 	if cfg.MaxSuspects != 5 {
 		t.Errorf("expected MaxSuspects 5, got %d", cfg.MaxSuspects)
 	}
-	if !cfg.LabelGuardEnabled {
-		t.Error("expected LabelGuardEnabled true by default")
-	}
-	if cfg.LabelGuardMax != 100 {
-		t.Errorf("expected LabelGuardMax 100, got %d", cfg.LabelGuardMax)
-	}
 	if cfg.MetricsAddr != ":2112" {
 		t.Errorf("expected MetricsAddr ':2112', got '%s'", cfg.MetricsAddr)
 	}
@@ -46,11 +40,9 @@ func TestLoadFromEnvDefaults(t *testing.T) {
 func TestLoadFromEnvOverrides(t *testing.T) {
 	os.Setenv("CFG_P95_MULTIPLIER", "2.5")
 	os.Setenv("CFG_MAX_SUSPECTS", "10")
-	os.Setenv("CFG_LABEL_GUARD_ENABLED", "0")
 	defer func() {
 		os.Unsetenv("CFG_P95_MULTIPLIER")
 		os.Unsetenv("CFG_MAX_SUSPECTS")
-		os.Unsetenv("CFG_LABEL_GUARD_ENABLED")
 	}()
 
 	cfg := LoadFromEnv()
@@ -59,9 +51,6 @@ func TestLoadFromEnvOverrides(t *testing.T) {
 	}
 	if cfg.MaxSuspects != 10 {
 		t.Errorf("expected MaxSuspects 10, got %d", cfg.MaxSuspects)
-	}
-	if cfg.LabelGuardEnabled {
-		t.Error("expected LabelGuardEnabled false")
 	}
 }
 
@@ -121,14 +110,6 @@ func TestValidateAnalysisIntervalZero(t *testing.T) {
 	cfg.AnalysisInterval = 0
 	if err := cfg.Validate(); err == nil {
 		t.Error("expected error for AnalysisInterval=0")
-	}
-}
-
-func TestValidateLabelGuardMaxZero(t *testing.T) {
-	cfg := LoadFromEnv()
-	cfg.LabelGuardMax = 0
-	if err := cfg.Validate(); err == nil {
-		t.Error("expected error for LabelGuardMax=0")
 	}
 }
 

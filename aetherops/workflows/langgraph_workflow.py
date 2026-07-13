@@ -966,9 +966,3 @@ def run_workflow(workflow: StateGraph, initial_state: dict) -> dict:
         raise
 
 
-def load_workflow_from_yaml(path: str = "workflow.yaml") -> StateGraph:
-    """Load workflow configuration from YAML and build the graph."""
-    with open(path, "r") as f:
-        config = yaml.safe_load(f)
-    logger.info("Loaded workflow: %s", config.get("workflow", {}).get("name", "unknown"))
-    return build_workflow()
