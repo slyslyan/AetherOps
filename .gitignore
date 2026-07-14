@@ -32,6 +32,9 @@ tmp/
 
 # Generated eBPF object files
 *.o
+# 但 eBPF embedded .o 文件需要入库（被 //go:embed 引用）
+!*_bpfel.o
+!*_bpfeb.o
 
 # Python cache
 __pycache__/
