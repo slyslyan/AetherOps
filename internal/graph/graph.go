@@ -7,7 +7,7 @@ import (
 	"sync"
 )
 
-const emaAlpha = 0.2
+const EmaAlpha = 0.2
 
 // ServiceNode 表示服务拓扑中的一个节点。
 type ServiceNode struct {
@@ -121,7 +121,7 @@ func (g *ServiceGraph) AddCall(src, dst string, latencyMs float64, isError bool)
 	if e.EmaLat == 0 {
 		e.EmaLat = e.AvgLat
 	} else {
-		e.EmaLat = emaAlpha*e.AvgLat + (1-emaAlpha)*e.EmaLat
+		e.EmaLat = EmaAlpha*e.AvgLat + (1-EmaAlpha)*e.EmaLat
 	}
 
 	e.LatencyWindow = append(e.LatencyWindow, latencyMs)

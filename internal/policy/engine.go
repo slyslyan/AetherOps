@@ -449,19 +449,19 @@ func (pe *Engine) CheckBeforeMitigation(suspects []graph.Suspicion) bool {
 	result := pe.Check(action)
 
 	if result.Denied {
-		slog.Warn(fmt.Sprintf("⚠️  POLICY GUARD: Action DENIED for %s", top.Node))
+		slog.Warn(fmt.Sprintf("POLICY GUARD: Action DENIED for %s", top.Node))
 		for _, reason := range result.Reasons {
-			slog.Info(fmt.Sprintf("   └─ %s", reason))
+			slog.Info(fmt.Sprintf("   - %s", reason))
 		}
-		slog.Info(fmt.Sprintf("   └─ Matched rules: %v", result.MatchedBy))
+		slog.Info(fmt.Sprintf("   - Matched rules: %v", result.MatchedBy))
 		auditLog("DENY", action, result)
 		return false
 	}
 
 	if result.Warned {
-		slog.Warn(fmt.Sprintf("⚠️  POLICY GUARD: Action WARNED for %s (executing with caution)", top.Node))
+		slog.Warn(fmt.Sprintf("POLICY GUARD: Action WARNED for %s (executing with caution)", top.Node))
 		for _, reason := range result.Reasons {
-			slog.Info(fmt.Sprintf("   └─ %s", reason))
+			slog.Info(fmt.Sprintf("   - %s", reason))
 		}
 		auditLog("WARN", action, result)
 	}

@@ -70,7 +70,7 @@ class AetherOpsDaemon:
                 def log_message(self, fmt, *args):
                     pass  # silence HTTP log
 
-            server = HTTPServer(("0.0.0.0", port), MetricsHandler)
+            server = HTTPServer(("127.0.0.1", port), MetricsHandler)
             thread = Thread(target=server.serve_forever, daemon=True)
             thread.start()
             self._metrics_server = server

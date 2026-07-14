@@ -93,6 +93,19 @@ func (c *Config) Validate() error {
 	if c.AnalysisInterval <= 0 {
 		errs = append(errs, "AnalysisInterval must be positive")
 	}
+
+	if c.AnalysisWindowSec <= 0 {
+		errs = append(errs, "AnalysisWindowSec must be positive")
+	}
+	if c.CallQPSDropRatio < 0 || c.CallQPSDropRatio > 1 {
+		errs = append(errs, "CallQPSDropRatio must be in [0, 1]")
+	}
+	if c.CallAnomalyWeight < 0 {
+		errs = append(errs, "CallAnomalyWeight must be >= 0")
+	}
+	if c.TCDropTTL <= 0 {
+		errs = append(errs, "TCDropTTL must be positive")
+	}
 	if len(errs) > 0 {
 		return fmt.Errorf("invalid config (%s): %w", join(errs, "; "), apperrors.ErrInvalidConfig)
 	}

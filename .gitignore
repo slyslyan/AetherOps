@@ -1,6 +1,6 @@
 # Binaries
 ebpf-local
-tracer
+/tracer
 pprof-demo
 minikube-linux-amd64
 *.exe

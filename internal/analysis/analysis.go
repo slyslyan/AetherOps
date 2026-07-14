@@ -36,7 +36,7 @@ func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspici
 		if e.CallEma == 0 {
 			e.CallEma = currentQPS
 		} else {
-			e.CallEma = emaAlpha*currentQPS + (1-emaAlpha)*e.CallEma
+			e.CallEma = graph.EmaAlpha*currentQPS + (1-graph.EmaAlpha)*e.CallEma
 		}
 
 		e.CallAnomaly = 0
@@ -108,8 +108,6 @@ func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspici
 
 	return suspects
 }
-
-const emaAlpha = 0.2
 
 type kv struct {
 	Node  string
