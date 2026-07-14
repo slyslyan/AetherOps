@@ -2,6 +2,7 @@ package mitigation
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -19,28 +21,23 @@ import (
 	"ebpf-autoheal/internal/graph"
 )
 
-// 最大响应体大小：16MB
 const maxResponseBody = 16 << 20
 
-// TCExecutor 封装 eBPF TC 丢包操作。
 type TCExecutor interface {
 	AddDropIP(ip string) error
 	RemoveDropIP(ip string) error
 	RemoveAll() error
 }
 
-// K8sClient 封装 K8s Pod 操作。
 type K8sClient interface {
 	RestartPodByIP(ip string) error
-	GetPodByIP(ip string) (string, string, error) // namespace, name, error
+	GetPodByIP(ip string) (string, string, error)
 }
 
-// PolicyChecker 提供策略检查能力。
 type PolicyChecker interface {
 	CheckBeforeMitigation(suspects []graph.Suspicion) bool
 }
 
-// Service 管理自愈操作。
 type Service struct {
 	cfg        *config.Config
 	policy     PolicyChecker
@@ -49,7 +46,6 @@ type Service struct {
 	outputDir  string
 }
 
-// NewService 创建自愈服务。
 func NewService(cfg *config.Config, pc PolicyChecker) *Service {
 	outputDir := os.Getenv("AETHEROPS_OUTPUT_DIR")
 	if outputDir == "" {
@@ -70,12 +66,10 @@ func NewService(cfg *config.Config, pc PolicyChecker) *Service {
 	}
 }
 
-// outputFile 在输出目录中创建文件并返回完整路径。
 func (s *Service) outputFile(pattern string) (*os.File, error) {
 	return os.CreateTemp(s.outputDir, pattern)
 }
 
-// PerformMitigation 对嫌疑节点执行自愈操作。
 func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecutor, k8s K8sClient) {
 	if len(suspects) == 0 {
 		return
@@ -99,9 +93,13 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 		ip := parts[0]
 		port := parts[1]
 
-		// 验证 IP 格式，防止 SSRF / 路径遍历
 		if net.ParseIP(ip) == nil {
 			slog.Info(fmt.Sprintf("   -> invalid IP from suspect: %s, skipping mitigation", ip))
+			return
+		}
+
+		if portNum, err := strconv.Atoi(port); err != nil || portNum < 1 || portNum > 65535 {
+			slog.Info(fmt.Sprintf("   -> invalid port from suspect: %s, skipping mitigation", port))
 			return
 		}
 
@@ -129,7 +127,7 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 				f.Close()
 			}
 		}
-		if gorData, err := s.fetchText(fmt.Sprintf("http://%s:%s/debug/pprof/goroutine?debug=2", ip, port), "goroutine dump"); err == nil {
+		if gorData, err := s.fetchText(fmt.Sprintf("http://%s/debug/pprof/goroutine?debug=2", joinHostPort(ip, port)), "goroutine dump"); err == nil {
 			f, _ := s.outputFile("goroutine-*.txt")
 			if f != nil {
 				f.Write(gorData)
@@ -137,7 +135,7 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 				f.Close()
 			}
 		}
-		if threadData, err := s.fetchText(fmt.Sprintf("http://%s:%s/debug/pprof/threadcreate?debug=1", ip, port), "thread dump"); err == nil {
+		if threadData, err := s.fetchText(fmt.Sprintf("http://%s/debug/pprof/threadcreate?debug=1", joinHostPort(ip, port)), "thread dump"); err == nil {
 			f, _ := s.outputFile("thread-*.txt")
 			if f != nil {
 				f.Write(threadData)
@@ -154,15 +152,13 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 	s.cleanupOldOutput()
 }
 
-// ---- pprof 火焰图 ----
-
 func (s *Service) fetchCPUProfileSVG(targetIP, targetPort string) ([]byte, error) {
-	url := fmt.Sprintf("http://%s:%s/debug/pprof/profile?seconds=%d", targetIP, targetPort, s.cfg.ProfileDurationSec)
+	url := fmt.Sprintf("http://%s/debug/pprof/profile?seconds=%d", joinHostPort(targetIP, targetPort), s.cfg.ProfileDurationSec)
 	return s.fetchPprofSVG(url, "cpu profile")
 }
 
 func (s *Service) fetchHeapProfileSVG(targetIP, targetPort string) ([]byte, error) {
-	url := fmt.Sprintf("http://%s:%s/debug/pprof/heap", targetIP, targetPort)
+	url := fmt.Sprintf("http://%s/debug/pprof/heap", joinHostPort(targetIP, targetPort))
 	return s.fetchPprofSVG(url, "heap profile")
 }
 
@@ -199,10 +195,9 @@ func (s *Service) fetchPprofSVG(url, desc string) ([]byte, error) {
 	tmpSVG.Close()
 
 	cmd := exec.Command("go", "tool", "pprof", "-svg", "-output", tmpSVG.Name(), tmpProfile.Name())
-	cmd = withTimeoutDefault(cmd)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := runWithTimeout(cmd, 5*time.Minute); err != nil {
 		return nil, fmt.Errorf("generate flamegraph failed (%v, stderr: %s): %w", err, stderr.String(), apperrors.ErrPprofGen)
 	}
 	svgData, err := os.ReadFile(tmpSVG.Name())
@@ -232,8 +227,6 @@ func (s *Service) fetchText(url, desc string) ([]byte, error) {
 	return data, nil
 }
 
-// ---- tcpdump ----
-
 func (s *Service) capturePackets(targetIP string, durationSec int) {
 	if net.ParseIP(targetIP) == nil {
 		slog.Info(fmt.Sprintf("   -> invalid IP for packet capture: %s", targetIP))
@@ -256,7 +249,6 @@ func (s *Service) capturePackets(targetIP string, durationSec int) {
 	select {
 	case <-time.After(time.Duration(durationSec+2) * time.Second):
 		cmd.Process.Signal(syscall.SIGTERM)
-		// 限制 pcap 文件大小
 		if fi, err := os.Stat(fname); err == nil && fi.Size() > 100<<20 {
 			os.Remove(fname)
 			slog.Info(fmt.Sprintf("   -> capture too large (%d bytes), removed", fi.Size()))
@@ -271,8 +263,6 @@ func (s *Service) capturePackets(targetIP string, durationSec int) {
 		}
 	}
 }
-
-// ---- 飞书通知 ----
 
 func (s *Service) sendAlert(suspects []graph.Suspicion, flameFilenames []string) {
 	webhookURL := os.Getenv("FEISHU_WEBHOOK")
@@ -316,7 +306,6 @@ func (s *Service) sendAlert(suspects []graph.Suspicion, flameFilenames []string)
 	}
 }
 
-// cleanupOldOutput 清理超过 1 小时的旧输出文件。
 func (s *Service) cleanupOldOutput() {
 	entries, err := os.ReadDir(s.outputDir)
 	if err != nil {
@@ -331,14 +320,21 @@ func (s *Service) cleanupOldOutput() {
 	}
 }
 
-// withTimeoutDefault 为命令添加默认超时（5 分钟）。
-func withTimeoutDefault(cmd *exec.Cmd) *exec.Cmd {
-	timer := time.AfterFunc(5*time.Minute, func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-	})
+func runWithTimeout(cmd *exec.Cmd, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
 	go func() {
-		cmd.Wait()
-		timer.Stop()
+		<-ctx.Done()
+		if cmd.Process != nil {
+			cmd.Process.Signal(syscall.SIGTERM)
+		}
 	}()
-	return cmd
+	return cmd.Run()
+}
+
+func joinHostPort(ip, port string) string {
+	if net.ParseIP(ip) != nil && net.ParseIP(ip).To4() == nil {
+		return fmt.Sprintf("[%s]:%s", ip, port)
+	}
+	return fmt.Sprintf("%s:%s", ip, port)
 }
