@@ -285,7 +285,7 @@ func (s *Server) handleExecuteRemediation(ctx context.Context, req mcp.CallToolR
 		}), nil
 	}
 
-return mcp.NewToolResultStructuredOnly(map[string]interface{}{
+	return mcp.NewToolResultStructuredOnly(map[string]interface{}{
 		"accepted":     true,
 		"execution_id": execID,
 		"status":       "evaluated_only",
