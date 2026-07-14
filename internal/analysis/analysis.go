@@ -19,6 +19,9 @@ import (
 //
 // 返回嫌疑节点列表，按分数从高到低排列。没有异常时返回 nil。
 func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspicion {
+	g.RLock()
+	defer g.RUnlock()
+
 	// 第 1 步：计算每条边的异常分数
 	for _, e := range g.Edges {
 		if e.Count < 2 {
