@@ -38,34 +38,134 @@ class DiagnosisReport:
 
 
 def parse_llm_response(raw: str) -> DiagnosisReport:
-    """Parse LLM response into a structured DiagnosisReport."""
+    """Parse LLM response into a structured DiagnosisReport.
+
+    Attempts three strategies in order:
+    1. Extract JSON from ```json or ``` code blocks
+    2. Extract JSON from bare {...} in the text
+    3. Regex fallback for natural language responses
+    """
+    data = None
+
+    # Strategy 1 & 2: JSON extraction from code blocks or bare braces
+    json_str = None
     try:
         if "```json" in raw:
             json_str = raw.split("```json")[1].split("```")[0].strip()
         elif "```" in raw:
             json_str = raw.split("```")[1].split("```")[0].strip()
         else:
-            json_str = raw[raw.find("{") : raw.rfind("}") + 1]
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                json_str = raw[start : end + 1]
 
-        data = json.loads(json_str)
+        if json_str:
+            data = json.loads(json_str)
+    except (json.JSONDecodeError, KeyError, ValueError):
+        pass
+
+    if data:
         return DiagnosisReport(
             root_cause=data.get("root_cause", "unknown"),
             confidence=data.get("confidence", 0.5),
-            explanation=data.get("explanation", ""),
+            explanation=data.get("explanation", raw),
             affected_services=data.get("affected_services", []),
             recommended_actions=data.get("recommended_actions", []),
             raw_llm_response=raw,
         )
-    except (json.JSONDecodeError, KeyError, ValueError) as e:
-        logger.warning("Failed to parse LLM response as JSON: %s", e)
-        return DiagnosisReport(
-            root_cause="unknown",
-            confidence=0.0,
-            explanation=raw,
-            affected_services=[],
-            recommended_actions=[],
-            raw_llm_response=raw,
+
+    # Strategy 3: Regex fallback for natural language
+    try:
+        extracted = _extract_fields_from_text(raw)
+        if extracted and extracted.get("root_cause"):
+            return DiagnosisReport(
+                root_cause=extracted["root_cause"],
+                confidence=extracted.get("confidence", 0.5),
+                explanation=raw,
+                affected_services=extracted.get("affected_services", []),
+                recommended_actions=extracted.get("recommended_actions", []),
+                raw_llm_response=raw,
+            )
+    except Exception:
+        pass
+
+    # Everything failed — return raw text as explanation
+    logger.warning("Failed to parse LLM response as JSON or text, falling back")
+    return DiagnosisReport(
+        root_cause="unknown",
+        confidence=0.0,
+        explanation=raw,
+        affected_services=[],
+        recommended_actions=[],
+        raw_llm_response=raw,
+    )
+
+
+def _extract_fields_from_text(text: str) -> dict:
+    """Extract structured diagnosis fields from natural language text via regex.
+
+    Handles responses like 'root cause: redis-cache:6379, confidence: 0.72'
+    where the LLM did not produce JSON.
+    """
+    import re
+
+    result: dict = {}
+
+    # Root cause: "root cause: service-name" or "root cause is service-name"
+    m = re.search(
+        r"(?:root[_\s]cause)\s*(?::|=|is\s+)\s*[`\"']?([\w\-]+(?:[:\/][\w\-]+)*)",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        result["root_cause"] = m.group(1)
+
+    # Confidence: "confidence: 0.85" or "confidence: 85%"
+    m = re.search(r"confidence\s*[:\s]\s*([0-9.]+)", text, re.IGNORECASE)
+    if m:
+        val = float(m.group(1))
+        if val > 1:
+            val = val / 100.0
+        result["confidence"] = max(0.0, min(val, 1.0))
+
+    # Affected services: bullet list or comma list after "affected services"
+    m = re.search(
+        r"affected[_\s]services\s*[:\s](.*?)(?:\n\n|\Z)",
+        text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if m:
+        services = re.findall(
+            r"[`\"']?([\w\-]+(?:[:\/][\w\-]+)*)[`\"']?", m.group(1)
         )
+        result["affected_services"] = [
+            s for s in services if s and not s.isspace() and len(s) > 1
+        ]
+
+    # Recommended actions: look for known action keywords in the text
+    actions = []
+    action_keywords = {
+        "TC_DROP",
+        "POD_RESTART",
+        "SCALE_UP",
+        "CONFIG_CHANGE",
+        "IMAGE_ROLLBACK",
+    }
+    for kw in action_keywords:
+        if kw.lower() in text.lower() or kw.replace("_", " ") in text.lower():
+            actions.append(
+                {
+                    "action": kw,
+                    "target": result.get("root_cause", "unknown"),
+                    "risk": "MEDIUM",
+                    "rationale": "",
+                }
+            )
+    if actions:
+        result["recommended_actions"] = actions
+
+    return result
 
 
 # ---------- provider interface ----------

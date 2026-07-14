@@ -27,7 +27,6 @@ import time
 
 # ── Disable verbose logging ──
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
-logging.getLogger("aetherops").setLevel(logging.INFO)
 logger = logging.getLogger("aetherops.demo")
 
 # ── ANSI colors for terminal output ──
@@ -71,8 +70,7 @@ def main():
     section("STEP 1: Architecture — Supervisor + 5 Expert Agents", CYAN)
     print(f"""  {BOLD}Data Plane (Go){RESET}
     ┌─ eBPF kprobe → Ring Buffer → ServiceGraph → Anomaly Detection
-    ├─ MCP Server  → get_topology / evaluate_remediation / execute_remediation
-    └─ gRPC Server  → anomaly event streaming
+    └─ MCP Server  → get_topology / evaluate_remediation / execute_remediation
 
   {BOLD}Cognitive Plane (Python){RESET}
     ┌─ Supervisor Agent     ← routes based on state readiness
@@ -110,23 +108,23 @@ def main():
     section("STEP 3: MCP Protocol — Go Data Plane Tools", MAGENTA)
     print(f"  Connecting to MCP server at {mcp_addr} ...\n")
 
-    from aetherops.core.mcp_client import MCPClient
+    from aetherops.core.mcp_client import MCPClient, run_async
 
     client = MCPClient(address=mcp_addr)
     try:
-        client.connect()
+        run_async(client.connect())
     except Exception as e:
         logger.warning("MCP server not reachable (%s). Using demo mode with mock data.", e)
         client = None  # type: ignore
 
     if client:
         # 3a. List tools
-        tools = client._list_tools()
+        tools = client.list_discovered_tools()
         step("3a. tools/list → Available Tools",
              f"{json.dumps([t['name'] for t in tools], indent=2)}")
 
         # 3b. Get topology
-        topo = client.get_topology(include_healthy=True)
+        topo = run_async(client.get_topology(include_healthy=True))
         step("3b. tools/call get_topology → Service Graph Snapshot",
              f"  Nodes: {topo.node_count}, Edges: {topo.edge_count}\n"
              + f"  Timestamp: {topo.timestamp_unix_nano}")
@@ -144,7 +142,7 @@ def main():
         # 3c. Evaluate remediation
         step("3c. tools/call evaluate_remediation → Blast Radius",
              "Target: payment-service:8080 | Action: SCALE_UP")
-        risk = client.evaluate_remediation("payment-service:8080", "SCALE_UP")
+        risk = run_async(client.evaluate_remediation("payment-service:8080", "SCALE_UP"))
         print(f"    Risk Level:  {risk.get('risk_level', 'N/A')}")
         print(f"    Upstream:    {risk.get('affected_upstream_count', 0)} services")
         print(f"    Downstream:  {risk.get('affected_downstream_count', 0)} services")

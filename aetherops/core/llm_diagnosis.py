@@ -49,8 +49,12 @@ You will receive:
 3. Rank the affected services by severity
 4. Propose remediation actions (max 3), ordered by risk
 
-## Output Format
-Return a JSON object with:
+## Output Format — CRITICAL: You MUST return ONLY valid JSON.
+
+Do NOT include any explanatory text, markdown, or conversation outside the JSON block.
+Do NOT prefix with "Here is my analysis:" or any other natural language.
+You MUST return ONLY the JSON object wrapped in ```json ... ``` tags.
+
 ```json
 {
   "root_cause": "service-name",
@@ -172,7 +176,7 @@ def _build_diagnosis_prompt(causal_graph: dict, anomaly_context: dict) -> str:
         "## Anomaly Context",
         json.dumps(anomaly_context, indent=2),
         "",
-        "Please analyze and return a structured diagnosis report as JSON.",
+        "Analyze and return ONLY valid JSON wrapped in ```json tags. No natural language outside the JSON block.",
     ]
     return "\n".join(sections)
 

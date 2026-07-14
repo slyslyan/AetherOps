@@ -137,7 +137,7 @@ class MCPClient:
 
     def close(self) -> None:
         """Close the MCP session synchronously."""
-        if self._session or self._streams:
+        if self._session or self._sse_ctx:
             try:
                 run_async(self._async_close())
             except Exception:
