@@ -1,6 +1,8 @@
 package analysis
 
 import (
+	"fmt"
+	"log/slog"
 	"math"
 	"sort"
 	"strings"
@@ -94,13 +96,13 @@ func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspici
 	// 第 3 步：故障集群分组
 	clusters := ClusterSuspects(suspects)
 	if len(clusters) > 0 {
-		println("   🔗 故障集群分组：")
+		slog.Info("fault clusters detected", "count", len(clusters))
 		for i, c := range clusters {
-			print("   集群", i+1, ": ")
-			for _, s := range c.Nodes {
-				print(s.Node, " (分数 ", s.Score, ") ")
+			nodes := make([]string, len(c.Nodes))
+			for j, s := range c.Nodes {
+				nodes[j] = fmt.Sprintf("%s(%.2f)", s.Node, s.Score)
 			}
-			println()
+			slog.Info(fmt.Sprintf("  cluster %d: %v", i+1, nodes))
 		}
 	}
 

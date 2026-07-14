@@ -152,10 +152,10 @@ func TestPerformMitigationInvalidIP(t *testing.T) {
 	s.PerformMitigation(suspects, nil, nil)
 }
 
-func TestWithTimeoutDefault(t *testing.T) {
-	cmd := withTimeoutDefault(exec.Command("sleep", "0"))
-	if cmd == nil {
-		t.Error("expected non-nil cmd")
+func TestRunWithTimeout(t *testing.T) {
+	err := runWithTimeout(exec.Command("sleep", "0"), time.Second)
+	if err != nil {
+		t.Errorf("expected no error, got: %v", err)
 	}
 }
 
