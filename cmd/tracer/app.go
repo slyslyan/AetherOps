@@ -68,7 +68,7 @@ type App struct {
 	httpEventsRd   *ringbuf.Reader
 
 	// TCP RTT (request-level round-trip time via tcp_sendmsg → tcp_recvmsg)
-	rttObjs  tcp_rttObjects
+	rttObjs   tcp_rttObjects
 	kpSendRtt link.Link
 	kpRecvRtt link.Link
 	rttRd     *ringbuf.Reader
