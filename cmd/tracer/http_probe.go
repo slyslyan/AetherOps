@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	apperrors "ebpf-autoheal/internal/errors"
 	"github.com/cilium/ebpf/link"
@@ -16,7 +17,11 @@ import (
 	"ebpf-autoheal/internal/metrics"
 )
 
-// initHTTPProbe 加载 HTTP uprobe 程序并挂载到目标二进制。
+// httpProbeActive 标记 uprobe 是否已挂载（防止重复挂载）
+var httpProbeActive bool
+
+// initHTTPProbe 仅加载 eBPF 对象和 ringbuf reader，不挂载 uprobe。
+// uprobe 通过 StartHTTPProbe() 按需动态挂载。
 func (a *App) initHTTPProbe(targetExe string) error {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return fmt.Errorf("remove memlock (%v): %w", err, apperrors.ErrRemoveMemlock)
@@ -34,23 +39,34 @@ func (a *App) initHTTPProbe(targetExe string) error {
 		return fmt.Errorf("creating HTTP ringbuf reader failed (%v): %w", err, apperrors.ErrRingBufCreate)
 	}
 	a.httpEventsRd = rd
+	slog.Info("HTTP probe objects loaded (uprobe not attached — on-demand only)")
+	return nil
+}
 
+// StartHTTPProbe 动态挂载 HTTP/gRPC uprobe，采集详细耗时信息。
+// 1 分钟后自动卸载，避免持续 CPU 开销。重复调用无副作用。
+func (a *App) StartHTTPProbe() {
+	if httpProbeActive {
+		return
+	}
+	targetExe := a.cfg.HTTPProbeTarget
 	if targetExe == "" {
-		return nil
+		return
 	}
 
 	exe, err := link.OpenExecutable(targetExe)
 	if err != nil {
-		slog.Info(fmt.Sprintf("HTTP uprobe: open %s failed: %v, HTTP parsing unavailable", targetExe, err))
-		return nil
+		slog.Info(fmt.Sprintf("HTTP uprobe: open %s failed: %v", targetExe, err))
+		return
 	}
 
+	objs := a.httpProbeObjs
 	up1, err := exe.Uprobe("net/http.(*conn).readRequest", objs.UprobeHttpReadRequest, nil)
 	if err != nil {
 		slog.Info(fmt.Sprintf("HTTP uprobe: readRequest attach failed: %v", err))
 	} else {
 		a.httpProbeLinks = append(a.httpProbeLinks, up1)
-		slog.Info("HTTP uprobe: readRequest attached")
+		slog.Info("HTTP uprobe: readRequest attached (on-demand)")
 	}
 
 	up2, err := exe.Uprobe("net/http.(*response).WriteHeader", objs.UprobeHttpWriteHeader, nil)
@@ -58,7 +74,7 @@ func (a *App) initHTTPProbe(targetExe string) error {
 		slog.Info(fmt.Sprintf("HTTP uprobe: WriteHeader attach failed: %v", err))
 	} else {
 		a.httpProbeLinks = append(a.httpProbeLinks, up2)
-		slog.Info("HTTP uprobe: WriteHeader attached")
+		slog.Info("HTTP uprobe: WriteHeader attached (on-demand)")
 	}
 
 	up3, err := exe.Uprobe("google.golang.org/grpc.(*ClientConn).Invoke", objs.UprobeGrpcInvoke, nil)
@@ -66,10 +82,19 @@ func (a *App) initHTTPProbe(targetExe string) error {
 		slog.Info(fmt.Sprintf("gRPC uprobe: Invoke attach failed: %v (target may not use gRPC)", err))
 	} else {
 		a.httpProbeLinks = append(a.httpProbeLinks, up3)
-		slog.Info("gRPC uprobe: Invoke attached")
+		slog.Info("gRPC uprobe: Invoke attached (on-demand)")
 	}
 
-	return nil
+	httpProbeActive = true
+	slog.Info("HTTP uprobe: on-demand tracing started, auto-detach in 60s")
+
+	// 60 秒后自动卸载，避免持续产生 CPU 开销
+	go func() {
+		time.Sleep(60 * time.Second)
+		a.closeHTTPProbe()
+		httpProbeActive = false
+		slog.Info("HTTP uprobe: on-demand tracing ended, probes detached")
+	}()
 }
 
 // closeHTTPProbe 分离所有 uprobe 并释放资源。

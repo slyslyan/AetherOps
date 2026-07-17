@@ -159,10 +159,11 @@ func (a *App) Start(ctx context.Context) error {
 		slog.Info(fmt.Sprintf("eBPF TC init failed (falling back to tc command): %v", err))
 	}
 
-	// ===== HTTP uprobe =====
+	// ===== HTTP uprobe（仅加载 eBPF 对象，不挂载；异常时按需动态挂载） =====
 	if err := a.initHTTPProbe(a.cfg.HTTPProbeTarget); err != nil {
 		slog.Info(fmt.Sprintf("HTTP probe init failed: %v", err))
 	}
+	go a.consumeHTTPEvents()
 
 	// ===== tcp_conntrack =====
 	connObjs := tcp_conntrackObjects{}
@@ -338,7 +339,6 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 	<-a.ready
 
 	go a.consumeConnEvents(ctx)
-	go a.consumeHTTPEvents()
 	go a.consumeRTTEvents(ctx)
 
 	simulate := false
@@ -382,6 +382,8 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 						slog.Info(fmt.Sprintf("  suspect: %s (score: %.2f, avg latency: %.2f ms, calls: %d)",
 							s.Node, s.Score, s.AvgLat, s.CallCount))
 					}
+					// 动态挂载 HTTP uprobe 采集详细耗时（自动 60s 后卸载）
+					a.StartHTTPProbe()
 					a.mitigation.PerformMitigation(suspects, nil, nil)
 					if a.mcpSrv != nil {
 						top := suspects[0]

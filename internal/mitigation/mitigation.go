@@ -44,9 +44,13 @@ type Service struct {
 	protected  map[string]bool
 	httpClient *http.Client
 	outputDir  string
+	cooldown   *config.Cooldown
 }
 
 func NewService(cfg *config.Config, pc PolicyChecker) *Service {
+	if cfg == nil {
+		cfg = &config.Config{MitigationCooldownSec: 120}
+	}
 	outputDir := os.Getenv("AETHEROPS_OUTPUT_DIR")
 	if outputDir == "" {
 		home, _ := os.UserHomeDir()
@@ -63,6 +67,7 @@ func NewService(cfg *config.Config, pc PolicyChecker) *Service {
 		},
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		outputDir:  outputDir,
+		cooldown:   config.NewCooldown(time.Duration(cfg.MitigationCooldownSec) * time.Second),
 	}
 }
 
@@ -75,6 +80,17 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 		return
 	}
 
+	// Dry Run 影子模式：全流程诊断 + 决策，但不实际执行自愈指令
+	if s.cfg.DryRun {
+		slog.Info("[DryRun] 影子模式已启用 — 仅记录 AI 决策，不执行自愈")
+		for i, suspect := range suspects {
+			slog.Info(fmt.Sprintf("[DryRun] suspect #%d %s (score %.2f) — 策略检查通过，但未实际执行",
+				i+1, suspect.Node, suspect.Score))
+		}
+		s.sendAlert(suspects, nil)
+		return
+	}
+
 	var flameFiles []string
 
 	// Walk the suspect chain: try each suspect in order (highest score first).
@@ -82,6 +98,13 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 	for i, suspect := range suspects {
 		if !s.policy.CheckBeforeMitigation(suspect) {
 			slog.Info(fmt.Sprintf("mitigation: suspect #%d %s blocked by policy, walking chain...", i+1, suspect.Node))
+			continue
+		}
+
+		// Anti-Flapping 防抖：检查冷却期，防止对同一节点反复自愈
+		if s.cooldown.IsOnCooldown(suspect.Node) {
+			slog.Info(fmt.Sprintf("mitigation: suspect #%d %s is on cooldown — 冷却期内拒绝自动执行，升级为人工审批",
+				i+1, suspect.Node))
 			continue
 		}
 
@@ -150,13 +173,14 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 			slog.Info(fmt.Sprintf("   -> non-IP:Port node, mitigation not supported: %s", suspect.Node))
 		}
 
+		s.cooldown.Set(suspect.Node)
 		s.sendAlert(suspects, flameFiles)
 		s.cleanupOldOutput()
 		return
 	}
 
-	// All suspects blocked by policy.
-	slog.Info("mitigation: all suspects blocked by policy, no action taken")
+	// All suspects blocked by policy or on cooldown.
+	slog.Info("mitigation: all suspects blocked, no action taken")
 	s.sendAlert(suspects, flameFiles)
 }
 

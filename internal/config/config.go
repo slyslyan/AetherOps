@@ -38,6 +38,9 @@ type Config struct {
 	HTTPProbeTarget string // uprobe 目标二进制路径（默认 "/proc/self/exe"）
 	TCDropTTL       int    // TC drop 规则 TTL（分钟，默认 5）
 
+	// ===== 安全开关 =====
+	DryRun bool // 影子模式：诊断 + 决策全流程但不实际执行自愈（默认 false）
+
 }
 
 // LoadFromEnv 从环境变量加载配置。
@@ -66,6 +69,7 @@ func LoadFromEnv() *Config {
 		MCPAddr:               envStr("CFG_MCP_ADDR", ":50052"),
 		HTTPProbeTarget:       envStr("CFG_HTTP_PROBE_TARGET", "/proc/self/exe"),
 		TCDropTTL:             envInt("CFG_TC_DROP_TTL", 5),
+		DryRun:                envBool("DRY_RUN", false),
 	}
 }
 
@@ -146,6 +150,14 @@ func envStr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func envBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	return v == "1" || v == "true" || v == "yes"
 }
 
 // Cooldown 管理自愈冷却期，防止同一节点被频繁自愈。
