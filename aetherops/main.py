@@ -138,8 +138,8 @@ class AetherOpsDaemon:
             logger.info("Suppressed alert during storm: %s", event.node_id)
             return
 
-        # Build initial state
-        initial_state = default_diagnosis_state(event)
+        # Build initial state, reusing the daemon's persistent MCP connection
+        initial_state = default_diagnosis_state(event, mcp_client=self.client)
 
         # Run the workflow
         try:
@@ -153,9 +153,10 @@ class AetherOpsDaemon:
             logger.error("Workflow execution failed: %s", e)
 
 
-def default_diagnosis_state(event: AnomalyEvent) -> dict:
+def default_diagnosis_state(event: AnomalyEvent, mcp_client=None) -> dict:
     """Build the initial LangGraph state for an anomaly event."""
     return {
+        "_mcp_client": mcp_client,
         "anomaly_event": {
             "node_id": event.node_id,
             "anomaly_score": event.anomaly_score,

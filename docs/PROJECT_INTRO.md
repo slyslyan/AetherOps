@@ -28,13 +28,13 @@ flowchart TB
 
 **Go 数据面**：eBPF kprobe 零侵入捕获所有 TCP 通信 → ServiceGraph 实时拓扑 → 异常检测 + 反向随机游走根因分析 → 内核级自愈（TC 丢包/Pod 重启）。无外部依赖，仅内核 + K8s，可脱离认知面独立运行。
 
-**Python 认知面**：Supervisor + 5 Expert Agents 工作流（Planner → Topology/Causal Analyst → LLM Diagnostician → Risk Assessor → Remediation Executor），通过 MCP 协议获取数据面拓扑。LOW 风险自动执行，HIGH 风险人工审批。执行后自动验证恢复 + MTTR 报告。
+**Python 认知面**：Supervisor + 4 Expert Agents 工作流（Topology/Causal Analyst → LLM Diagnostician → Risk Assessor → Remediation Executor）。Planner 可选（`ENABLE_PLANNER=1` 开启，默认关闭）。通过 MCP 协议获取数据面拓扑。LOW 风险自动执行，HIGH 风险人工审批。执行后自动验证恢复 + MTTR 报告。LLM 调用含 TTL 缓存 + prompt 压缩优化（详见 `docs/llm-token-optimization.md`）。
 
 ## 技术要点
 
 | 层 | 要点 |
 |----|------|
-| **内核** | eBPF kprobe, TC, CO-RE, Ring Buffer |
+| **内核** | eBPF kprobe/kretprobe, TC, CO-RE, Ring Buffer（含 tcp_rtt 长连接 RTT 探针） |
 | **数据面** | Go 1.24, cilium/ebpf, 滑动窗口 P95 + EMA, 反向随机游走 |
 | **认知面** | Python, Supervisor + Multi-Agent, LLM 诊断（启发式回退） |
 | **通信** | MCP 协议（JSON-RPC 2.0 over HTTP SSE） |
@@ -48,5 +48,7 @@ go build -o ebpf-local ./cmd/tracer/ && sudo SIMULATE_LATENCY=1 ./ebpf-local
 
 # 认知面（另一终端）
 cd aetherops && pip install --break-system-packages -e .
+export LLM_PROVIDER=deepseek
+export LLM_API_KEY=your-key
 python -m aetherops.demo
 ```

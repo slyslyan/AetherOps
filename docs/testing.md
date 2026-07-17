@@ -11,7 +11,7 @@
 - Ubuntu 24.04 Server （推荐），内核 6.8+
 - Go 1.24+
 - clang, llvm, libbpf-dev, bpftool 已安装（参考 README 安装步骤）
-- 已下载或克隆项目源码，并位于项目根目录 `ebpf-autoheal/`
+- 已下载或克隆项目源码，并位于项目根目录 `ebpfagent/`
 
 ### 编译项目
 ```bash

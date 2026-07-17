@@ -67,6 +67,12 @@ type App struct {
 	httpProbeLinks []link.Link
 	httpEventsRd   *ringbuf.Reader
 
+	// TCP RTT (request-level round-trip time via tcp_sendmsg → tcp_recvmsg)
+	rttObjs  tcp_rttObjects
+	kpSendRtt link.Link
+	kpRecvRtt link.Link
+	rttRd     *ringbuf.Reader
+
 	// 网络接口
 	ifaceName string
 
@@ -205,6 +211,43 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.connRd = connRd
 
+	// ===== TCP RTT（请求级往返延迟） =====
+	rttObjs := tcp_rttObjects{}
+	if err := loadTcp_rttObjects(&rttObjs, nil); err != nil {
+		slog.Info(fmt.Sprintf("tcp_rtt load failed (RTT measurement unavailable): %v", err))
+	} else {
+		a.rttObjs = rttObjs
+
+		kpSendRtt, err := link.Kprobe("tcp_sendmsg", rttObjs.KprobeTcpSendmsgRtt, nil)
+		if err != nil {
+			slog.Info(fmt.Sprintf("tcp_rtt kprobe/tcp_sendmsg attach failed: %v", err))
+			a.rttObjs.Close()
+		} else {
+			a.kpSendRtt = kpSendRtt
+			kpRecvRtt, err := link.Kretprobe("tcp_recvmsg", rttObjs.KretprobeTcpRecvmsgRtt, nil)
+			if err != nil {
+				slog.Info(fmt.Sprintf("tcp_rtt kretprobe/tcp_recvmsg attach failed: %v", err))
+				a.kpSendRtt.Close()
+				a.rttObjs.Close()
+				a.kpSendRtt = nil
+			} else {
+				a.kpRecvRtt = kpRecvRtt
+				rttRd, err := ringbuf.NewReader(rttObjs.RttEvents)
+				if err != nil {
+					slog.Info(fmt.Sprintf("tcp_rtt ringbuf create failed: %v", err))
+					a.kpRecvRtt.Close()
+					a.kpSendRtt.Close()
+					a.rttObjs.Close()
+					a.kpRecvRtt = nil
+					a.kpSendRtt = nil
+				} else {
+					a.rttRd = rttRd
+					slog.Info("tcp_rtt probes loaded — request-level RTT measurement active")
+				}
+			}
+		}
+	}
+
 	// ===== HTTP 服务（Prometheus + 健康检查） =====
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -247,6 +290,18 @@ func (a *App) Shutdown(ctx context.Context) {
 	if a.connRd != nil {
 		a.connRd.Close()
 	}
+	if a.rttRd != nil {
+		a.rttRd.Close()
+	}
+	if a.kpRecvRtt != nil {
+		a.kpRecvRtt.Close()
+	}
+	if a.kpSendRtt != nil {
+		a.kpSendRtt.Close()
+	}
+	if a.rttObjs.tcp_rttPrograms.KprobeTcpSendmsgRtt != nil {
+		a.rttObjs.Close()
+	}
 	if a.kpExit != nil {
 		a.kpExit.Close()
 	}
@@ -284,6 +339,7 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 
 	go a.consumeConnEvents(ctx)
 	go a.consumeHTTPEvents()
+	go a.consumeRTTEvents(ctx)
 
 	simulate := false
 	simulateStr := os.Getenv("SIMULATE_LATENCY")
@@ -432,6 +488,56 @@ func (a *App) consumeConnEvents(ctx context.Context) {
 		durationMs := float64(evt.DurationNs) / 1e6
 		slog.Info(fmt.Sprintf("CONN %s %s:%d -> %s:%d duration=%.2f ms pid=%d (%s)",
 			role, srcIP, evt.Sport, dstIP, evt.Dport, durationMs, evt.Pid, comm))
+
+		// Feed short-lived connection RTT into the graph for anomaly detection.
+		// Filter out connections >30s (e.g. pooled DB connections) to avoid
+		// polluting the baseline with connection-lifetime durations.
+		if durationMs > 0 && durationMs < 30000 {
+			srcSvc := a.resolver.Resolve(evt.Pid, comm)
+			dstSvc := fmt.Sprintf("%s:%d", dstIP, evt.Dport)
+			isErr := durationMs > 1000.0
+			a.graph.AddCall(srcSvc, dstSvc, durationMs, isErr)
+		}
+	}
+}
+
+// consumeRTTEvents 读取 tcp_rtt Ring Buffer 中的请求级 RTT 事件。
+func (a *App) consumeRTTEvents(ctx context.Context) {
+	if a.rttRd == nil {
+		return
+	}
+	slog.Info("RTT event consumer started")
+	for {
+		record, err := a.rttRd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+			slog.Info(fmt.Sprintf("rtt ringbuf read failed: %v", err))
+			continue
+		}
+		var evt netEventRaw
+		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &evt); err != nil {
+			slog.Info(fmt.Sprintf("rtt parse failed: %v", err))
+			continue
+		}
+		comm := strings.TrimRight(string(evt.Comm[:]), "\x00")
+		dstIP := uint32ToIP(evt.Daddr)
+
+		rttMs := float64(evt.Delta) / 1e6
+		// Filter implausible values.
+		if rttMs <= 0 || rttMs > 30000 {
+			continue
+		}
+		srcSvc := a.resolver.Resolve(evt.Pid, comm)
+		dstSvc := fmt.Sprintf("%s:%d", dstIP, evt.Dport)
+		isErr := rttMs > 1000.0
+		a.graph.AddCall(srcSvc, dstSvc, rttMs, isErr)
 	}
 }
 

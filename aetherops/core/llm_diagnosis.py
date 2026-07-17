@@ -33,84 +33,32 @@ def _count_heuristic_fallback():
     )
 
 
-# Default system prompt for the diagnosis agent.
-# Includes known fault patterns for precise remediation recommendations.
-DIAGNOSIS_SYSTEM_PROMPT = """You are an expert SRE reliability engineer diagnosing a microservice outage.
-
-## Input Data
-You will receive:
-1. A causal graph showing the inferred relationships between services
-2. Anomaly scores and latency metrics for affected services
-3. The current service topology from eBPF kernel probes
-
-## Your Task
-1. Analyze the causal chain to identify the ROOT CAUSE service
-2. Explain why this service is the root cause (what evidence supports it)
-3. Rank the affected services by severity
-4. Propose remediation actions (max 3), ordered by risk
-
-## Output Format — CRITICAL: You MUST return ONLY valid JSON.
-
-Do NOT include any explanatory text, markdown, or conversation outside the JSON block.
-Do NOT prefix with "Here is my analysis:" or any other natural language.
-You MUST return ONLY the JSON object wrapped in ```json ... ``` tags.
+DIAGNOSIS_SYSTEM_PROMPT = """\
+You are an SRE diagnosing a microservice outage from eBPF causal graph + anomaly data.
+Return ONLY ```json, no other text.
 
 ```json
 {
   "root_cause": "service-name",
   "confidence": 0.85,
-  "explanation": "Detailed step-by-step reasoning...",
-  "affected_services": ["svc-a", "svc-b"],
+  "explanation": "...",
+  "affected_services": ["..."],
   "recommended_actions": [
-    {"action": "POD_RESTART", "target": "svc-a", "risk": "MEDIUM", "rationale": "..."},
-    ...
+    {"action": "TC_DROP|POD_RESTART|SCALE_UP|CONFIG_CHANGE|IMAGE_ROLLBACK", "target": "...", "risk": "LOW|MEDIUM|HIGH", "rationale": "..."}
   ]
 }
 ```
 
-## Quality Checklist
-- Confidence must be between 0 and 1
-- Explanations must reference specific metrics (latency, error rate, QPS drops)
-- Actions must map to one of: TC_DROP, POD_RESTART, SCALE_UP, CONFIG_CHANGE, IMAGE_ROLLBACK
+Rules: confidence 0-1, cite specific lat/err metrics, max 3 actions.
 
-## Known Fault Patterns (Use as Reference)
+Patterns (quick reference):
+- DB slow: hi P95 on db edges, normal CPU → CONFIG_CHANGE or POD_RESTART
+- Cache storm: multi-svc spike, hi err rate → SCALE_UP then CONFIG_CHANGE
+- Network loss: all edges from one src elevated → TC_DROP then POD_RESTART
+- Resource exhaust: gradual ramp, retry storm → SCALE_UP then POD_RESTART
+- Hotspot: isolated P95 spike, single node → CONFIG_CHANGE or IMAGE_ROLLBACK
 
-### Pattern 1: Database Slow Query
-- **Symptoms**: High P95 latency on downstream db/redis edges, normal CPU, low QPS drop
-- **Causal signature**: db-service appears as root cause with multiple dependents impacted
-- **Recommended action**: CONFIG_CHANGE (connection pool tuning) or POD_RESTART (if connection leak)
-- **Key metric to check**: p95_latency_ms >> avg_latency_ms, high spread
-
-### Pattern 2: Cache Avalanche / Cache Miss Storm
-- **Symptoms**: Sudden latency spike across multiple services simultaneously, high error rate, QPS drop
-- **Causal signature**: No single root cause — many edges show co-elevated anomaly
-- **Recommended action**: SCALE_UP (to handle origin load surge), then CONFIG_CHANGE (cache TTL tuning)
-- **Key metric to check**: error_rate elevates before latency in time series
-
-### Pattern 3: Network Congestion / Packet Loss
-- **Symptoms**: Latency increase on ALL outgoing edges from a node, TCP retransmits, connection resets
-- **Causal signature**: Upstream services show correlated elevation; no single dependent stands out
-- **Recommended action**: TC_DROP (circuit break on offending upstream), then POD_RESTART (connection pool flush)
-- **Key metric to check**: error_rate and latency jointly elevated across all edges of same src
-
-### Pattern 4: Resource Exhaustion (CPU/Memory/Connection Pool)
-- **Symptoms**: Latency increases gradually (ramp-up pattern), CallCount may increase (retry storm)
-- **Causal signature**: Root cause node has high anomaly score but its dependents show cascading failures
-- **Recommended action**: SCALE_UP (immediate capacity), followed by POD_RESTART (if memory leak)
-- **Key metric to check**: call_count increasing (retries) while latency also climbing
-
-### Pattern 5: Inefficient Algorithm / Hot Spot
-- **Symptoms**: Isolated P95 spike on a single service, no downstream dependency chain
-- **Causal signature**: Single node anomaly with no causal edges to others
-- **Recommended action**: CONFIG_CHANGE (feature flag flip) or IMAGE_ROLLBACK
-- **Key metric to check**: avg_latency_ms may be normal while P95 is very high
-
-### Remediation Risk Guidance
-- TC_DROP: LOW risk — always safe for circuit break
-- SCALE_UP: LOW risk — increases replica count
-- POD_RESTART: MEDIUM risk — brief connection drain, safe with retries
-- CONFIG_CHANGE: MEDIUM risk — parameter tuning, monitor before/after
-- IMAGE_ROLLBACK: HIGH risk — requires approval, last resort
+Risk: TC_DROP/SCALE_UP=LOW, POD_RESTART/CONFIG_CHANGE=MEDIUM, IMAGE_ROLLBACK=HIGH
 """
 
 
@@ -167,18 +115,36 @@ def diagnose(
     return _heuristic_diagnosis(causal_graph, anomaly_context)
 
 
+MAX_USER_MSG_CHARS = 4000  # ~1000 tokens, prevent topology explosion
+
+
 def _build_diagnosis_prompt(causal_graph: dict, anomaly_context: dict) -> str:
-    """Build the user message for LLM diagnosis."""
-    sections = [
-        "## Causal Graph",
-        json.dumps(causal_graph, indent=2),
-        "",
-        "## Anomaly Context",
-        json.dumps(anomaly_context, indent=2),
-        "",
-        "Analyze and return ONLY valid JSON wrapped in ```json tags. No natural language outside the JSON block.",
-    ]
-    return "\n".join(sections)
+    """Build a compact user message, truncating large topologies."""
+    # Limit edges to the top 20 by anomaly score to avoid token explosion
+    cg = dict(causal_graph)
+    if len(cg.get("edges", [])) > 20:
+        cg["edges"] = sorted(cg["edges"], key=lambda e: e.get("anomaly_score", 0), reverse=True)[:20]
+        cg["_truncated"] = True
+
+    # Strip verbose fields from anomaly context
+    ac = {}
+    evt = anomaly_context.get("anomaly_event", {})
+    if evt:
+        ac["node"] = evt.get("node_id", "")
+        ac["score"] = evt.get("anomaly_score", 0)
+        ac["lat"] = evt.get("avg_latency_ms", 0)
+        ac["chain"] = evt.get("suspect_chain", [])[:10]
+    topo = anomaly_context.get("topology", {})
+    if topo:
+        ac["nodes"] = topo.get("node_count", 0)
+        ac["edges"] = topo.get("edge_count", 0)
+
+    cg_str = json.dumps(cg, separators=(",", ":"), default=str)
+    ac_str = json.dumps(ac, separators=(",", ":"), default=str)
+    msg = f"causal:{cg_str}\nanomaly:{ac_str}"
+    if len(msg) > MAX_USER_MSG_CHARS:
+        msg = msg[:MAX_USER_MSG_CHARS] + "..."
+    return msg
 
 
 def _heuristic_diagnosis(causal_graph: dict, anomaly_context: dict) -> DiagnosisReport:
@@ -187,9 +153,15 @@ def _heuristic_diagnosis(causal_graph: dict, anomaly_context: dict) -> Diagnosis
     nodes = causal_graph.get("nodes", [])
 
     # Simple heuristic: node with most outgoing edges in causal graph is root cause.
-    outgoing = {}
-    for src, dst, _ in edges:
-        outgoing[src] = outgoing.get(src, 0) + 1
+    outgoing: dict[str, int] = {}
+    seen_dsts: set[str] = set()
+    for edge in edges:
+        src = edge.get("src", "")
+        dst = edge.get("dst", "")
+        if src:
+            outgoing[src] = outgoing.get(src, 0) + 1
+        if dst:
+            seen_dsts.add(dst)
 
     root_cause = max(outgoing, key=outgoing.get) if outgoing else (nodes[0] if nodes else "unknown")
 
@@ -197,7 +169,7 @@ def _heuristic_diagnosis(causal_graph: dict, anomaly_context: dict) -> Diagnosis
         root_cause=root_cause,
         confidence=0.4,
         explanation=f"Heuristic diagnosis: {root_cause} has the most causal outgoing edges ({outgoing.get(root_cause, 0)}).",
-        affected_services=[d for s, d, _ in edges],
+        affected_services=list(seen_dsts),
         recommended_actions=[
             {"action": "TC_DROP", "target": root_cause, "risk": "LOW", "rationale": "Automatic TC circuit break based on heuristic."}
         ],

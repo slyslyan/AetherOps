@@ -15,8 +15,11 @@ import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, List, Optional
 
+from anyio.streams.memory import MemoryObjectReceiveStream
 from mcp import ClientSession
 from mcp.client.sse import sse_client
+from mcp.shared.message import SessionMessage
+from mcp.types import JSONRPCNotification
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +31,12 @@ logger = logging.getLogger(__name__)
 _BG_LOOP: Optional[asyncio.AbstractEventLoop] = None
 _BG_THREAD: Optional[threading.Thread] = None
 _BG_LOCK = threading.Lock()
+
+# The event loop on which the MCP session was created.
+# run_async must dispatch coroutines to THIS loop (not the background loop)
+# because the session's _receive_loop and SSE tasks run here, and anyio memory
+# streams are bound to a single event loop.
+_SESSION_LOOP: Optional[asyncio.AbstractEventLoop] = None
 
 
 def _start_bg_loop() -> asyncio.AbstractEventLoop:
@@ -65,15 +74,98 @@ def stop_bg_loop():
 
 
 def run_async(coro, loop: Optional[asyncio.AbstractEventLoop] = None):
-    """Run an async coroutine synchronously on the background MCP event loop.
+    """Run an async coroutine synchronously, blocking the calling thread.
 
-    Safe to call from any thread (including threads with their own running
-    event loop).  The coroutine is dispatched to a dedicated background loop
-    and the calling thread blocks until it completes.
+    Dispatches to *loop* if given, otherwise to the session's event loop
+    (``_SESSION_LOOP``), falling back to a dedicated background loop.  Using the
+    session loop is critical because anyio memory streams are bound to a single
+    event loop — cross-loop usage causes a deadlock.
     """
     if loop is None:
-        loop = get_bg_loop()
+        loop = _SESSION_LOOP or get_bg_loop()
     return asyncio.run_coroutine_threadsafe(coro, loop).result()
+
+
+# ── Anomaly notification interceptor ──
+# The Python MCP SDK uses a strict RootModel union for ServerNotification
+# (CancelledNotification | ProgressNotification | LoggingMessageNotification |
+#  ResourceUpdatedNotification | ...).  Any custom notification method like
+# "notifications/events/anomaly" fails model_validate in _receive_loop and is
+# silently dropped with a warning before ClientSession._received_notification
+# is ever called.
+#
+# We intercept at the stream level: before the session's _receive_loop sees
+# each message, we check if it is an anomaly JSON-RPC notification and, if so,
+# hand it to the callback and skip forwarding it to the session.
+
+
+class _AnomalyFilter:
+    """Wraps a read stream to intercept anomaly notifications.
+
+    Messages whose JSON-RPC method is ``notifications/events/anomaly`` are
+    routed to *on_anomaly* instead of being forwarded to the session (which
+    would drop them during ServerNotification validation).
+
+    Implements the anyio MemoryObjectReceiveStream protocol so the session's
+    ``_receive_loop`` can iterate over it with ``async for`` and enter it as
+    an async context manager.
+    """
+
+    def __init__(self, inner: MemoryObjectReceiveStream, on_anomaly):
+        self._inner = inner
+        self._on_anomaly = on_anomaly
+
+    # ── ObjectReceiveStream protocol ──
+
+    async def receive(self):
+        while True:
+            msg = await self._inner.receive()
+            if isinstance(msg, SessionMessage):
+                root = msg.message.root
+                if isinstance(root, JSONRPCNotification):
+                    if root.method == "notifications/events/anomaly":
+                        self._on_anomaly(root.params or {})
+                        continue
+            return msg
+
+    def receive_nowait(self):
+        return self._inner.receive_nowait()
+
+    def clone(self):
+        return _AnomalyFilter(self._inner.clone(), self._on_anomaly)
+
+    def statistics(self):
+        return self._inner.statistics()
+
+    # ── AsyncResource protocol (required by async with) ──
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        pass  # owned by the SSE context; close is handled at the SSE level
+
+    async def aclose(self):
+        await self._inner.aclose()
+
+    def close(self):
+        self._inner.close()
+
+    # ── Extended attributes (TypedAttributeProvider) ──
+
+    def extra(self, key, default=None):
+        return getattr(self._inner, 'extra', lambda k, d: d)(key, default)
+
+    def extra_attributes(self):
+        return getattr(self._inner, 'extra_attributes', lambda: {})()
+
+    # ── Async iteration ──
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        return await self.receive()
 
 
 @dataclass
@@ -98,7 +190,7 @@ class AnomalyEvent:
 class MCPClient:
     """MCP client connecting to the AetherOps Go data plane via the official MCP SDK.
 
-    Uses stdin/stdout or SSE transport to communicate with the MCP server.
+    Uses SSE transport to communicate with the MCP server.
     Tools and resources are discovered dynamically at connection time.
     """
 
@@ -109,11 +201,17 @@ class MCPClient:
         self._sse_ctx = None
         self._tools: List[dict] = []
         self._resources: List[dict] = []
+        self._anomaly_queue = asyncio.Queue()
 
     async def connect(self) -> None:
         """Establish connection and discover available tools/resources."""
+        global _SESSION_LOOP
+        _SESSION_LOOP = asyncio.get_running_loop()
         self._sse_ctx = sse_client(self._sse_url)
         read, write = await self._sse_ctx.__aenter__()
+        # Wrap read stream to intercept anomaly notifications before the
+        # session's strict ServerNotification validation drops them.
+        read = _AnomalyFilter(read, self._on_anomaly)
         self._session = ClientSession(read, write)
         await self._session.__aenter__()
         await self._session.initialize()
@@ -144,6 +242,7 @@ class MCPClient:
                 pass
 
     async def _async_close(self) -> None:
+        global _SESSION_LOOP
         if self._session:
             try:
                 await self._session.__aexit__(None, None, None)
@@ -156,6 +255,7 @@ class MCPClient:
             except Exception:
                 pass
             self._sse_ctx = None
+        _SESSION_LOOP = None
 
     def list_discovered_tools(self) -> List[dict]:
         """Return the list of tools discovered during connect()."""
@@ -171,7 +271,6 @@ class MCPClient:
             raise RuntimeError("MCP client not connected — call connect() first")
 
         result = await self._session.call_tool(name, arguments or {})
-        # Result content is a list of TextContent/ImageContent/etc.
         if result.content:
             for item in result.content:
                 if item.type == "text":
@@ -247,46 +346,36 @@ class MCPClient:
         """List all active policy rules."""
         return await self._call_tool("list_policies", {})
 
-    # ── Anomaly Subscription (SSE notifications) ──
+    # ── Anomaly Subscription (SSE notification interceptor) ──
+
+    def _on_anomaly(self, params: dict) -> None:
+        """Called by _AnomalyFilter when an anomaly notification is intercepted."""
+        self._anomaly_queue.put_nowait(params)
 
     async def subscribe_anomalies(self, min_score: float = 0.5) -> AsyncIterator[AnomalyEvent]:
-        """Connect to the SSE stream and yield anomaly notifications as they arrive.
+        """Subscribe to anomaly notifications via the MCP session.
 
-        This is an async generator — use ``async for event in client.subscribe_anomalies():``.
-
-        MCP notifications follow JSON-RPC 2.0 with the ``notifications/events/anomaly``
-        method, matching the events published by PublishAnomalyNotification in the Go
-        data plane.
+        Anomaly notifications are intercepted at the stream level by
+        _AnomalyFilter, which catches them before the MCP SDK's strict
+        ServerNotification validation would drop them.
         """
-        import httpx
+        logger.info("Subscribing to anomaly events (min_score=%.2f)", min_score)
 
-        sse_url = f"{self.address}/sse"
-        logger.info("Subscribing to anomaly SSE stream at %s", sse_url)
+        while True:
+            try:
+                params = await self._anomaly_queue.get()
+            except Exception as e:
+                logger.error("Anomaly queue error: %s", e)
+                break
 
-        async with httpx.AsyncClient(timeout=None) as client:
-            async with client.stream("GET", sse_url) as resp:
-                async for line in resp.aiter_lines():
-                    line = line.strip()
-                    if not line.startswith("data:"):
-                        continue
-                    payload = line[5:].strip()
-                    try:
-                        msg = json.loads(payload)
-                    except json.JSONDecodeError:
-                        continue
-
-                    if not isinstance(msg, dict):
-                        continue
-                    if msg.get("method") == "notifications/events/anomaly":
-                        params = msg.get("params", {})
-                        score = params.get("anomaly_score", 0)
-                        if score < min_score:
-                            continue
-                        yield AnomalyEvent(
-                            node_id=params.get("node_id", ""),
-                            anomaly_score=score,
-                            avg_latency_ms=params.get("avg_latency_ms", 0.0),
-                            call_count=params.get("call_count", 0),
-                            suspect_chain=params.get("suspect_chain", []),
-                            timestamp_unix_nano=params.get("timestamp_nano", int(time.time() * 1e9)),
-                        )
+            score = params.get("anomaly_score", 0)
+            if score < min_score:
+                continue
+            yield AnomalyEvent(
+                node_id=params.get("node_id", ""),
+                anomaly_score=score,
+                avg_latency_ms=params.get("avg_latency_ms", 0.0),
+                call_count=params.get("call_count", 0),
+                suspect_chain=params.get("suspect_chain", []),
+                timestamp_unix_nano=params.get("timestamp_nano", int(time.time() * 1e9)),
+            )

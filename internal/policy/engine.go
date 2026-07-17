@@ -412,27 +412,22 @@ func matchAnyPattern(name string, patterns []string) bool {
 	return false
 }
 
-// CheckBeforeMitigation 是 policy guard 的快捷入口，从 Suspicion 构造 PolicyAction。
-func (pe *Engine) CheckBeforeMitigation(suspects []graph.Suspicion) bool {
-	if len(suspects) == 0 {
-		return true
-	}
-
-	top := suspects[0]
+// CheckBeforeMitigation 是 policy guard 的快捷入口，从单个 Suspicion 构造 PolicyAction。
+func (pe *Engine) CheckBeforeMitigation(suspect graph.Suspicion) bool {
 	action := PolicyAction{
 		Action:     ActionTCPDrop,
-		TargetNode: top.Node,
+		TargetNode: suspect.Node,
 		Timestamp:  time.Now(),
 	}
 
-	if top.IsIPPort {
-		parts := strings.Split(top.Node, ":")
+	if suspect.IsIPPort {
+		parts := strings.Split(suspect.Node, ":")
 		if len(parts) >= 1 {
 			action.TargetIP = parts[0]
 		}
 	}
 
-	nodeLower := strings.ToLower(top.Node)
+	nodeLower := strings.ToLower(suspect.Node)
 	switch {
 	case strings.Contains(nodeLower, "kube-system") || strings.Contains(nodeLower, "kube-proxy") ||
 		strings.Contains(nodeLower, "coredns") || strings.Contains(nodeLower, "traefik"):
@@ -449,7 +444,7 @@ func (pe *Engine) CheckBeforeMitigation(suspects []graph.Suspicion) bool {
 	result := pe.Check(action)
 
 	if result.Denied {
-		slog.Warn(fmt.Sprintf("POLICY GUARD: Action DENIED for %s", top.Node))
+		slog.Warn(fmt.Sprintf("POLICY GUARD: Action DENIED for %s", suspect.Node))
 		for _, reason := range result.Reasons {
 			slog.Info(fmt.Sprintf("   - %s", reason))
 		}
@@ -459,7 +454,7 @@ func (pe *Engine) CheckBeforeMitigation(suspects []graph.Suspicion) bool {
 	}
 
 	if result.Warned {
-		slog.Warn(fmt.Sprintf("POLICY GUARD: Action WARNED for %s (executing with caution)", top.Node))
+		slog.Warn(fmt.Sprintf("POLICY GUARD: Action WARNED for %s (executing with caution)", suspect.Node))
 		for _, reason := range result.Reasons {
 			slog.Info(fmt.Sprintf("   - %s", reason))
 		}

@@ -19,13 +19,13 @@ func newTestConfig() *config.Config {
 
 type mockPolicyChecker struct{}
 
-func (m mockPolicyChecker) CheckBeforeMitigation(suspects []graph.Suspicion) bool {
+func (m mockPolicyChecker) CheckBeforeMitigation(suspect graph.Suspicion) bool {
 	return true
 }
 
 type denyPolicyChecker struct{}
 
-func (d denyPolicyChecker) CheckBeforeMitigation(suspects []graph.Suspicion) bool {
+func (d denyPolicyChecker) CheckBeforeMitigation(suspect graph.Suspicion) bool {
 	return false
 }
 

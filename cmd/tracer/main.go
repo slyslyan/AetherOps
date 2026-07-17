@@ -2,6 +2,7 @@
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -cflags "-O2 -g -Wall -target bpf -I/usr/include -I/usr/include/x86_64-linux-gnu -I../../bpf" tc_drop ../../bpf/tc_drop.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -cflags "-O2 -g -Wall -target bpf -I/usr/include -I/usr/include/x86_64-linux-gnu -I../../bpf" http_probe ../../bpf/http_probe.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -cflags "-O2 -g -Wall -target bpf -I/usr/include -I/usr/include/x86_64-linux-gnu -I../../bpf" tcp_conntrack ../../bpf/tcp_conntrack.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc clang -no-strip -cflags "-O2 -g -Wall -target bpf -I/usr/include -I/usr/include/x86_64-linux-gnu -I../../bpf" tcp_rtt ../../bpf/tcp_rtt.c
 
 package main
 

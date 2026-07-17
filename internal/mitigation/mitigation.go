@@ -35,7 +35,7 @@ type K8sClient interface {
 }
 
 type PolicyChecker interface {
-	CheckBeforeMitigation(suspects []graph.Suspicion) bool
+	CheckBeforeMitigation(suspect graph.Suspicion) bool
 }
 
 type Service struct {
@@ -74,82 +74,90 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 	if len(suspects) == 0 {
 		return
 	}
-	top := suspects[0]
-
-	if !s.policy.CheckBeforeMitigation(suspects) {
-		slog.Info(fmt.Sprintf("mitigation: policy guard denied action for %s, skipping", top.Node))
-		return
-	}
-
-	slog.Info(fmt.Sprintf("mitigation triggered: suspect %s (score %.2f)", top.Node, top.Score))
 
 	var flameFiles []string
 
-	if top.IsIPPort {
-		parts := strings.Split(top.Node, ":")
-		if len(parts) != 2 {
-			return
-		}
-		ip := parts[0]
-		port := parts[1]
-
-		if net.ParseIP(ip) == nil {
-			slog.Info(fmt.Sprintf("   -> invalid IP from suspect: %s, skipping mitigation", ip))
-			return
+	// Walk the suspect chain: try each suspect in order (highest score first).
+	// If the top suspect is blocked by policy, fall through to the next one.
+	for i, suspect := range suspects {
+		if !s.policy.CheckBeforeMitigation(suspect) {
+			slog.Info(fmt.Sprintf("mitigation: suspect #%d %s blocked by policy, walking chain...", i+1, suspect.Node))
+			continue
 		}
 
-		if portNum, err := strconv.Atoi(port); err != nil || portNum < 1 || portNum > 65535 {
-			slog.Info(fmt.Sprintf("   -> invalid port from suspect: %s, skipping mitigation", port))
-			return
+		slog.Info(fmt.Sprintf("mitigation triggered: suspect #%d %s (score %.2f)", i+1, suspect.Node, suspect.Score))
+
+		if suspect.IsIPPort {
+			parts := strings.Split(suspect.Node, ":")
+			if len(parts) != 2 {
+				continue
+			}
+			ip := parts[0]
+			port := parts[1]
+
+			if net.ParseIP(ip) == nil {
+				slog.Info(fmt.Sprintf("   -> invalid IP from suspect: %s, skipping", ip))
+				continue
+			}
+
+			if portNum, err := strconv.Atoi(port); err != nil || portNum < 1 || portNum > 65535 {
+				slog.Info(fmt.Sprintf("   -> invalid port from suspect: %s, skipping", port))
+				continue
+			}
+
+			if tcDrop == nil {
+				slog.Info(fmt.Sprintf("   -> TC executor not configured, skipping TC drop for %s", ip))
+			} else if s.protected[ip] {
+				slog.Info(fmt.Sprintf("   -> protected IP, skipping: %s", ip))
+			} else if err := tcDrop.AddDropIP(ip); err != nil {
+				slog.Info(fmt.Sprintf("   -> TC drop failed: %v", err))
+			}
+
+			if svg, err := s.fetchCPUProfileSVG(ip, port); err == nil {
+				f, _ := s.outputFile("cpu-*.svg")
+				if f != nil {
+					f.Write(svg)
+					flameFiles = append(flameFiles, f.Name())
+					f.Close()
+				}
+			}
+			if heapSVG, err := s.fetchHeapProfileSVG(ip, port); err == nil {
+				f, _ := s.outputFile("heap-*.svg")
+				if f != nil {
+					f.Write(heapSVG)
+					flameFiles = append(flameFiles, f.Name())
+					f.Close()
+				}
+			}
+			if gorData, err := s.fetchText(fmt.Sprintf("http://%s/debug/pprof/goroutine?debug=2", joinHostPort(ip, port)), "goroutine dump"); err == nil {
+				f, _ := s.outputFile("goroutine-*.txt")
+				if f != nil {
+					f.Write(gorData)
+					flameFiles = append(flameFiles, f.Name())
+					f.Close()
+				}
+			}
+			if threadData, err := s.fetchText(fmt.Sprintf("http://%s/debug/pprof/threadcreate?debug=1", joinHostPort(ip, port)), "thread dump"); err == nil {
+				f, _ := s.outputFile("thread-*.txt")
+				if f != nil {
+					f.Write(threadData)
+					flameFiles = append(flameFiles, f.Name())
+					f.Close()
+				}
+			}
+			s.capturePackets(ip, s.cfg.ProfileDurationSec)
+		} else {
+			slog.Info(fmt.Sprintf("   -> non-IP:Port node, mitigation not supported: %s", suspect.Node))
 		}
 
-		if tcDrop == nil {
-			slog.Info(fmt.Sprintf("   -> TC executor not configured, skipping TC drop for %s", ip))
-		} else if s.protected[ip] {
-			slog.Info(fmt.Sprintf("   -> protected IP, skipping: %s", ip))
-		} else if err := tcDrop.AddDropIP(ip); err != nil {
-			slog.Info(fmt.Sprintf("   -> TC drop failed: %v", err))
-		}
-
-		if svg, err := s.fetchCPUProfileSVG(ip, port); err == nil {
-			f, _ := s.outputFile("cpu-*.svg")
-			if f != nil {
-				f.Write(svg)
-				flameFiles = append(flameFiles, f.Name())
-				f.Close()
-			}
-		}
-		if heapSVG, err := s.fetchHeapProfileSVG(ip, port); err == nil {
-			f, _ := s.outputFile("heap-*.svg")
-			if f != nil {
-				f.Write(heapSVG)
-				flameFiles = append(flameFiles, f.Name())
-				f.Close()
-			}
-		}
-		if gorData, err := s.fetchText(fmt.Sprintf("http://%s/debug/pprof/goroutine?debug=2", joinHostPort(ip, port)), "goroutine dump"); err == nil {
-			f, _ := s.outputFile("goroutine-*.txt")
-			if f != nil {
-				f.Write(gorData)
-				flameFiles = append(flameFiles, f.Name())
-				f.Close()
-			}
-		}
-		if threadData, err := s.fetchText(fmt.Sprintf("http://%s/debug/pprof/threadcreate?debug=1", joinHostPort(ip, port)), "thread dump"); err == nil {
-			f, _ := s.outputFile("thread-*.txt")
-			if f != nil {
-				f.Write(threadData)
-				flameFiles = append(flameFiles, f.Name())
-				f.Close()
-			}
-		}
-		s.capturePackets(ip, s.cfg.ProfileDurationSec)
-	} else {
-		slog.Info(fmt.Sprintf("   -> non-IP:Port node, mitigation not supported: %s", top.Node))
+		s.sendAlert(suspects, flameFiles)
+		s.cleanupOldOutput()
+		return
 	}
 
+	// All suspects blocked by policy.
+	slog.Info("mitigation: all suspects blocked by policy, no action taken")
 	s.sendAlert(suspects, flameFiles)
-	s.cleanupOldOutput()
 }
 
 func (s *Service) fetchCPUProfileSVG(targetIP, targetPort string) ([]byte, error) {

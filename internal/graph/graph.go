@@ -7,7 +7,19 @@ import (
 	"sync"
 )
 
-const EmaAlpha = 0.2
+const (
+	// EmaAlpha is the EMA smoothing factor for average latency.
+	EmaAlpha = 0.2
+
+	// BaselineEmaAlpha is the EMA smoothing factor for BaselineP95.
+	// A lower value (0.1) makes the baseline more stable against transient spikes.
+	BaselineEmaAlpha = 0.1
+
+	// BaselineGateMultiplier gates whether a window P95 is anomalous.
+	// When window P95 exceeds BaselineP95 * GateMultiplier, the current window
+	// is considered anomalous and is NOT incorporated into the baseline.
+	BaselineGateMultiplier = 2.0
+)
 
 // ServiceNode 表示服务拓扑中的一个节点。
 type ServiceNode struct {
@@ -31,6 +43,11 @@ type ServiceEdge struct {
 	LatencyWindow []float64
 	WindowSize    int
 	P95           float64
+
+	// BaselineP95 is a stable P95 baseline tracked via EMA with anomaly gating.
+	// It only incorporates non-anomalous windows so that bimodal traffic
+	// (normal + anomalous) does not inflate the anomaly threshold.
+	BaselineP95 float64
 
 	LastCount   int64
 	CallEma     float64
@@ -129,6 +146,15 @@ func (g *ServiceGraph) AddCall(src, dst string, latencyMs float64, isError bool)
 		e.LatencyWindow = e.LatencyWindow[1:]
 	}
 	e.P95 = Percentile(e.LatencyWindow, 95.0)
+
+	// Maintain stable BaselineP95 via EMA with anomaly gating.
+	// When the window P95 is near the baseline, slowly incorporate it.
+	// When it spikes (anomalous), freeze the baseline to avoid inflation.
+	if e.BaselineP95 == 0 {
+		e.BaselineP95 = e.P95
+	} else if e.P95 < e.BaselineP95*BaselineGateMultiplier {
+		e.BaselineP95 = BaselineEmaAlpha*e.P95 + (1-BaselineEmaAlpha)*e.BaselineP95
+	}
 
 	dstNode := g.Nodes[dst]
 	dstNode.CallCount++

@@ -13,9 +13,11 @@ Usage:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
+import time as _time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -213,7 +215,14 @@ class LLMProvider(ABC):
 # ---------- concrete providers ----------
 
 class OpenAICompatibleProvider(LLMProvider):
-    """For any OpenAI-compatible chat completions API (DeepSeek, OpenAI, Azure, vLLM, etc.)."""
+    """For any OpenAI-compatible chat completions API (DeepSeek, OpenAI, Azure, vLLM, etc.).
+
+    Includes a content-addressable TTL cache to avoid redundant API calls when
+    the same anomaly triggers repeated diagnoses within a short window.
+    """
+
+    _CACHE_TTL = 60       # seconds
+    _CACHE_MAX = 128      # max entries before LRU eviction
 
     def __init__(
         self,
@@ -226,10 +235,19 @@ class OpenAICompatibleProvider(LLMProvider):
         self.model = model
         self.base_url = base_url.rstrip("/")
         self._label = provider_label
+        self._cache: dict[str, tuple[str, float]] = {}  # key -> (response, expires_at)
 
     @property
     def name(self) -> str:
         return f"{self._label}({self.model})"
+
+    def _cache_key(self, system_prompt: str, user_message: str) -> str:
+        return hashlib.md5((system_prompt + user_message).encode()).hexdigest()
+
+    def _cache_cleanup(self, now: float) -> None:
+        expired = [k for k, (_, exp) in self._cache.items() if now > exp]
+        for k in expired:
+            del self._cache[k]
 
     def _request(
         self,
@@ -239,6 +257,15 @@ class OpenAICompatibleProvider(LLMProvider):
         temperature: float,
         timeout: int,
     ) -> Optional[str]:
+        key = self._cache_key(system_prompt, user_message)
+        now = _time.monotonic()
+        if key in self._cache:
+            cached, expires = self._cache[key]
+            if now <= expires:
+                logger.debug("%s cache hit key=%.12s", self._label, key)
+                return cached
+            del self._cache[key]
+
         payload = {
             "model": self.model,
             "messages": [
@@ -259,12 +286,23 @@ class OpenAICompatibleProvider(LLMProvider):
                 timeout=timeout,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"]
+            raw = resp.json()["choices"][0]["message"]["content"]
         except httpx.TimeoutException:
             logger.error("%s request timed out after %ds", self._label, timeout)
+            return None
         except Exception as e:
-            logger.error("%s request failed: %s", self._label, e)
-        return None
+            logger.error("%s request failed: %s", e)
+            return None
+
+        if raw is not None:
+            self._cache_cleanup(now)
+            if len(self._cache) >= self._CACHE_MAX:
+                oldest = min(self._cache, key=lambda k: self._cache[k][1])
+                del self._cache[oldest]
+            self._cache[key] = (raw, now + self._CACHE_TTL)
+            logger.debug("%s cache store key=%.12s size=%d", self._label, key, len(self._cache))
+
+        return raw
 
     def diagnose(
         self,
@@ -272,7 +310,7 @@ class OpenAICompatibleProvider(LLMProvider):
         user_message: str,
         timeout: int = 120,
     ) -> Optional[DiagnosisReport]:
-        raw = self._request(system_prompt, user_message, 4096, 0.3, timeout)
+        raw = self._request(system_prompt, user_message, 1024, 0.3, timeout)
         return parse_llm_response(raw) if raw else None
 
     def _chat_impl(
@@ -287,7 +325,11 @@ class OpenAICompatibleProvider(LLMProvider):
 
 
 class AnthropicProvider(LLMProvider):
-    """Anthropic Claude API (uses /v1/messages)."""
+    """Anthropic Claude API (uses /v1/messages).
+
+    Uses prompt caching: the system prompt is marked with cache_control so
+    it is only processed once across repeated diagnoses.
+    """
 
     def __init__(
         self,
@@ -313,7 +355,13 @@ class AnthropicProvider(LLMProvider):
     ) -> Optional[str]:
         payload = {
             "model": self.model,
-            "system": system_prompt,
+            "system": [
+                {
+                    "type": "text",
+                    "text": system_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             "messages": [{"role": "user", "content": user_message}],
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -343,7 +391,7 @@ class AnthropicProvider(LLMProvider):
         user_message: str,
         timeout: int = 120,
     ) -> Optional[DiagnosisReport]:
-        raw = self._request(system_prompt, user_message, 4096, 0.3, timeout)
+        raw = self._request(system_prompt, user_message, 1024, 0.3, timeout)
         return parse_llm_response(raw) if raw else None
 
     def _chat_impl(
@@ -407,7 +455,7 @@ class OllamaProvider(LLMProvider):
         user_message: str,
         timeout: int = 180,
     ) -> Optional[DiagnosisReport]:
-        raw = self._request(system_prompt, user_message, 4096, 0.3, timeout)
+        raw = self._request(system_prompt, user_message, 1024, 0.3, timeout)
         return parse_llm_response(raw) if raw else None
 
     def _chat_impl(

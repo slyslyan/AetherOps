@@ -31,14 +31,18 @@ from aetherops.core.feedback import (
 logger = logging.getLogger(__name__)
 
 
-def _fetch_topology(include_healthy: bool = False):
-    """Shared helper: fetch topology via MCP, returns a snapshot."""
+def _fetch_topology(include_healthy: bool = False, mcp_client=None):
+    """Fetch topology via MCP, reusing an existing client if provided."""
+    if mcp_client is not None:
+        return run_async(mcp_client.get_topology(include_healthy=include_healthy))
+
     mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
     client = MCPClient(address=mcp_addr)
-    run_async(client.connect())
-    snapshot = run_async(client.get_topology(include_healthy=include_healthy))
-    client.close()
-    return snapshot
+    try:
+        run_async(client.connect())
+        return run_async(client.get_topology(include_healthy=include_healthy))
+    finally:
+        client.close()
 
 
 AGENTS = Literal[
@@ -95,28 +99,13 @@ class DiagnosisState(TypedDict):
 
 # ── Planner ──
 
-PLANNER_SYSTEM_PROMPT = """You are an expert SRE operations planner. Given an anomaly event and historical context, create a step-by-step diagnosis and remediation plan.
+PLANNER_SYSTEM_PROMPT = """\
+You are an SRE planner. Given an anomaly event, output a diagnosis plan as JSON.
 
-## Available Agents
-- `topology_analyst` — Fetches live service topology from eBPF data plane
-- `causal_analyst` — Builds causal graph from topology data
-- `llm_diagnostician` — LLM-based root cause analysis
-- `risk_assessor` — Evaluates blast radius and risk level of recommended actions
-- `remediation_executor` — Executes remediation, verifies recovery
+Available agents: topology_analyst, causal_analyst, llm_diagnostician, risk_assessor, remediation_executor
 
-## Planning Rules
-1. topology_analyst and causal_analyst are always needed first (they provide data)
-2. llm_diagnostician must come after data is available
-3. risk_assessor and remediation_executor come last
-4. If the anomaly matches a known pattern (DB, network, cache, resource, hotspot), you may suggest re-ordering or repeating certain steps
-
-## Output Format
-```json
-{
-  "steps": ["topology_analyst", "causal_analyst", "llm_diagnostician", "risk_assessor", "remediation_executor"],
-  "reasoning": "Brief explanation of why this plan was chosen"
-}
-```
+Rules: topology+causal first, then llm, then risk+remediation last.
+Output: ```json {"steps": [...], "reasoning": "..."} ```
 """
 
 
@@ -151,26 +140,33 @@ def _robust_json_extract(text: str) -> dict:
     raise ValueError("No valid JSON extracted from LLM response")
 
 
+_DEFAULT_PLAN = {
+    "steps": [
+        "topology_analyst", "causal_analyst",
+        "llm_diagnostician",
+        "risk_assessor", "remediation_executor",
+    ],
+    "reasoning": "Default plan (planner disabled)",
+}
+
+
+def _planner_enabled() -> bool:
+    return os.getenv("ENABLE_PLANNER", "").lower() in ("1", "true", "yes")
+
+
 def _call_llm_for_plan(anomaly_event: dict, rag_context: str = "") -> dict:
-    """Call LLM to generate a diagnosis plan."""
+    """Call LLM to generate a diagnosis plan (only when ENABLE_PLANNER=true)."""
+    if not _planner_enabled():
+        return _DEFAULT_PLAN
+
     provider = ProviderFactory.from_env()
     if provider is None:
         logger.info("No LLM provider for planner — using default plan")
-        return {
-            "steps": [
-                "topology_analyst", "causal_analyst",
-                "llm_diagnostician",
-                "risk_assessor", "remediation_executor",
-            ],
-            "reasoning": "Default plan (LLM not available)",
-        }
+        return _DEFAULT_PLAN
 
-    user_msg = (
-        f"## Anomaly Event\n"
-        f"```json\n{json.dumps(anomaly_event, indent=2)}\n```\n"
-    )
+    user_msg = json.dumps(anomaly_event, separators=(",", ":"), default=str)
     if rag_context:
-        user_msg += f"\n## Historical Context (similar past incidents)\n{rag_context[:2000]}\n"
+        user_msg = f"anomaly:{user_msg}\nhistory:{rag_context[:2000]}"
 
     try:
         raw = provider.chat(PLANNER_SYSTEM_PROMPT, user_msg, max_tokens=1024, temperature=0.2, timeout=30)
@@ -184,14 +180,7 @@ def _call_llm_for_plan(anomaly_event: dict, rag_context: str = "") -> dict:
 
     except Exception as e:
         logger.warning("Planner LLM call failed (%s) — using default plan", e)
-        return {
-            "steps": [
-                "topology_analyst", "causal_analyst",
-                "llm_diagnostician",
-                "risk_assessor", "remediation_executor",
-            ],
-            "reasoning": f"Default plan (LLM error: {e})",
-        }
+        return _DEFAULT_PLAN
 
 
 def planner(state: DiagnosisState) -> dict:
@@ -215,7 +204,7 @@ def planner(state: DiagnosisState) -> dict:
 def topology_analyst(state: DiagnosisState) -> dict:
     """Expert 1: Fetch current service topology from Go MCP server."""
     try:
-        snapshot = _fetch_topology(include_healthy=False)
+        snapshot = _fetch_topology(include_healthy=False, mcp_client=state.get("_mcp_client"))
         logger.info("TopologyAnalyst: fetched %d nodes, %d edges",
                      snapshot.node_count, snapshot.edge_count)
         return {
@@ -388,6 +377,7 @@ def remediation_executor(state: DiagnosisState) -> dict:
         execution_result=result.get("execution_result", {}),
         diagnosis_report=report,
         anomaly_detected_at=anomaly_detected_at,
+        mcp_client=state.get("_mcp_client"),
     )
     result["recovery_report"] = recovery_report
     logger.info("RemediationExecutor: recovery verification complete")
@@ -424,6 +414,7 @@ def _verify_recovery(
     execution_result: dict,
     diagnosis_report: dict,
     anomaly_detected_at: float = 0.0,
+    mcp_client=None,
 ) -> str:
     """Re-fetch topology after remediation and generate a Markdown recovery report."""
     report_sections: list[str] = []
@@ -472,7 +463,7 @@ def _verify_recovery(
         time.sleep(delay)
 
         try:
-            snapshot = _fetch_topology(include_healthy=False)
+            snapshot = _fetch_topology(include_healthy=False, mcp_client=mcp_client)
 
             for edge in snapshot.edges:
                 if edge.get("src") == anomaly_node or edge.get("dst") == anomaly_node:
@@ -539,10 +530,17 @@ def supervisor(state: DiagnosisState) -> dict:
     next_agent: str
     instruction: Optional[str] = None
 
-    # Case 1: No plan yet → run planner
+    # Case 1: No plan yet
     if not plan:
-        next_agent = "planner"
-        instruction = "no plan yet"
+        if _planner_enabled():
+            next_agent = "planner"
+            instruction = "no plan yet"
+        else:
+            plan = _DEFAULT_PLAN["steps"]
+            state["plan"] = plan
+            state["plan_rationale"] = _DEFAULT_PLAN["reasoning"]
+            next_agent = plan[0]
+            instruction = "default plan"
 
     # Case 2: Follow plan
     elif step_idx < len(plan):

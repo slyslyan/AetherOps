@@ -30,7 +30,7 @@
 │  │  (systemd 服务)   │   localhost   │  (docker-compose) │    │
 │  │                   │    :50052     │                   │    │
 │  │  - kprobe 采集    │              │  - LangGraph      │    │
-│  │  - 拓扑构建       │              │  - Planner/Critic │    │
+│  │  - 拓扑构建       │              │  - Supervisor     │    │
 │  │  - 根因分析       │              │  - LLM 诊断       │    │
 │  │  - tc 限流        │              │  - 分级自愈       │    │
 │  └───────┬───────────┘              └─────────┬─────────┘    │
@@ -213,21 +213,24 @@ pgrep -f DataNode | xargs kill -9 2>/dev/null  # 确保完全停止
 启动 Python agent daemon，订阅 MCP 异常事件，运行完整 LangGraph 工作流。
 
 ```bash
-cd /home/sly/Downloads/xm/xm/ebpf-autoheal
+cd /home/sly/Downloads/xm/ebpfagent
 export LLM_API_KEY=sk-7e257937b5984736b2bf1177901fde1d
 export LLM_API_URL=https://api.deepseek.com/v1/chat/completions
 export LLM_MODEL=deepseek-v4-flash
-export PYTHONPATH=/home/sly/Downloads/xm/xm/ebpf-autoheal:$PYTHONPATH
+export PYTHONPATH=/home/sly/Downloads/xm/ebpfagent:$PYTHONPATH
 ~/.cache/pypoetry/virtualenvs/aetherops-qk5YUQrL-py3.12/bin/python \
   -m aetherops.main --daemon
 ```
 
 **诊断流程**：
-1. **Planner**：LLM 根据异常事件生成诊断计划
+1. **Planner**（可选，默认关闭）：LLM 根据异常事件生成诊断计划（`ENABLE_PLANNER=1` 开启）
 2. **Topology Analyst**：通过 MCP 获取当前拓扑，对比基线
 3. **Causal Analyst**：PC 算法构建因果图（如有 Prometheus 指标）
-4. **LLM Diagnostician**：综合拓扑 + 因果图进行根因分析
-5. **Critic**：评审诊断质量，拒绝或确认
+4. **LLM Diagnostician**：综合拓扑 + 因果图进行根因分析（含 TTL 缓存 + prompt 压缩优化）
+5. **Risk Assessor**：评估自愈风险等级
+6. **Remediation Executor**：执行分级自愈
+
+> **2026-07 架构简化**：Critic Agent 已移除（评审逻辑合并入 LLM Diagnostician 的结构化输出校验），Planner 默认关闭（`ENABLE_PLANNER=0`），直接使用硬编码 5 步默认计划。
 
 **量化验证标准**：
 
@@ -237,7 +240,7 @@ export PYTHONPATH=/home/sly/Downloads/xm/xm/ebpf-autoheal:$PYTHONPATH
 | 端到端诊断耗时 | < 5s（从异常事件入队到生成诊断报告） |
 | 受影响节点范围 | 准确标注 2 个 DataNode（master 离线 + slave0 延迟） |
 | 异常 RPC 调用占比 | 准确计算 slave0 相关边调用占比 |
-| Critic 评审 | 至少拒绝一次低置信度诊断并触发 re-diagnosis（展示自我反思能力） |
+| LLM Diagnostician | 结构化 JSON 输出校验通过（root_cause/confidence/explanation 字段完整） |
 
 ### 3.6 Phase 3 — 分级自愈执行 + 二次巡检
 
@@ -383,6 +386,9 @@ Critic 通过: True
 ---
 
 ## 5. 性能优化实现与对比
+
+> **注意**：以下测试数据采集于 2026-07-07 架构简化前。当前版本已移除 Critic Agent，Planner 默认关闭，
+> 并实施了 LLM Token 优化（详见 `docs/llm-token-optimization.md`）。重诊断循环问题已随 Critic 移除而消除。
 
 ### 5.1 四项优化
 
@@ -577,7 +583,7 @@ Agent Trace (8 spans):
 
 > 在实际生产环境中，一个 Agent 实例可能管理多个业务集群。如果没有集群标签隔离，一次故障诊断的爆炸半径分析可能错误地将其他集群的健康服务纳入影响范围，导致不必要的告警和误操作。通过给服务打标并在 blast_radius 计算中按标签过滤，我们保证故障域只限定在当前集群内。
 
-### 7.5 当被问到 "为什么优化后总耗时反而增加了"
+### 7.5 当被问到 "为什么优化后总耗时反而增加了"（历史记录，当前已通过移除 Critic 解决）
 
 > 两次优化运行都触发了 Critic → Re-Diagnosis 循环。根源不是代码问题，而是三层设计缺陷：
 >
@@ -589,7 +595,7 @@ Agent Trace (8 spans):
 >
 > 确定性优化（因果稀疏化 -43%、恢复退避 -64%）效果是明确的。解决方向是将 Critic 改为分层评审：低风险故障走规则校验（毫秒级），中高风险才走 LLM 评审，并给重诊断携带增量反馈。
 
-### 7.6 当被问到 "Critic 的评审为什么需要分层"
+### 7.6 当被问到 "Critic 的评审为什么需要分层"（历史记录，Critic 已移除）
 
 > 用 LLM 评审每份诊断报告就像让一个资深 SRE 审查每行代码——对于数据库架构变更这是必要的，但对于一个字段重命名也拉他来过就太浪费了。
 >
@@ -599,7 +605,7 @@ Agent Trace (8 spans):
 >
 > 这种设计既保障了速度（95% 的常见故障快速通过），又保留了质量（复杂场景有 LLM 兜底）。
 
-### 7.7 当被问到"规则引擎 + LLM 双轨制怎么设计"
+### 7.7 当被问到"规则引擎 + LLM 双轨制怎么设计"（前瞻设计讨论）
 
 > 双轨制的核心是：**规则处理确定性场景，LLM 处理不确定性场景**。
 >
@@ -626,11 +632,11 @@ Agent Trace (8 spans):
 
 ## 8. 下一步优化方向（按优先级）
 
-### P0 — Quick Wins（1 天内可落地）
+### P0 — Quick Wins（已完成）
 
-- [ ] **Critic 分层评审**：根据 risk_level 动态选择评审方式——LOW 走规则校验、MEDIUM/HIGH 走 LLM。预期：消除 90% 的重诊断循环
-- [ ] **硬限制循环次数**：`MAX_CRITIC_LOOPS=1`，二次仍不通过直接降级
-- [ ] **`MAX_CRITIC_LOOPS=0` 基线测试模式保留**：用于验证确定性优化收益
+- [x] **移除 Critic Agent**：评审逻辑合并入 LLM Diagnostician 结构化输出校验，消除重诊断循环
+- [x] **Planner 可选化**：默认关闭（`ENABLE_PLANNER=0`），使用硬编码 5 步默认计划，节省 ~500 token/工作流
+- [x] **LLM Token 优化**：System prompt 压缩、用户消息截断、max_tokens 4096→1024、client 端 TTL 缓存（详见 `docs/llm-token-optimization.md`）
 
 ### P1 — 质量提升（1 周内可落地）
 

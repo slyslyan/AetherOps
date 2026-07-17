@@ -44,7 +44,11 @@ func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspici
 			e.CallAnomaly = 1.0 + (e.CallEma-currentQPS)/e.CallEma
 		}
 
-		threshold := e.P95 * cfg.P95Multiplier
+		baseline := e.BaselineP95
+		if baseline == 0 {
+			baseline = e.P95
+		}
+		threshold := baseline * cfg.P95Multiplier
 		if threshold < cfg.MinLatThresholdMs {
 			threshold = cfg.MinLatThresholdMs
 		}
