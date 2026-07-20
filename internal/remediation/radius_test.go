@@ -1,4 +1,4 @@
-package blastradius
+package remediation
 
 import (
 	"fmt"
@@ -37,10 +37,6 @@ func TestEvaluateComputeAffected(t *testing.T) {
 func TestEvaluateBudgetConsumption(t *testing.T) {
 	g := newTestGraph()
 	report := Evaluate(g, "backend", pb.RemediationAction_TC_DROP, 10)
-	// backend has edges: frontend->backend, backend->database, backend->cache = 3 edges
-	// Total edges in graph: 5
-	// nodeCalls = frontend->backend(1) + backend->database(1) + backend->cache(1) = 3
-	// totalCalls = 5
 	if report.EstimatedErrorBudgetConsumption <= 0 {
 		t.Errorf("expected positive error budget consumption, got %f", report.EstimatedErrorBudgetConsumption)
 	}
@@ -63,7 +59,6 @@ func TestAssignRiskLevelTCDropLow(t *testing.T) {
 
 func TestAssignRiskLevelTCDropMedium(t *testing.T) {
 	g := graph.NewServiceGraph()
-	// Add many downstreams to trigger medium risk
 	for i := 0; i < 10; i++ {
 		g.AddCall("target", fmt.Sprintf("svc-%d", i), 1, false)
 	}
@@ -96,7 +91,6 @@ func TestAssignRiskLevelPodRestartMedium(t *testing.T) {
 	g := graph.NewServiceGraph()
 	g.AddCall("u1", "target", 1, false)
 	g.AddCall("u2", "target", 1, false)
-	// Add enough unrelated edges to keep error budget under 10%
 	for i := 0; i < 200; i++ {
 		g.AddCall(fmt.Sprintf("other-%d", i), "sink", 1, false)
 	}
@@ -157,7 +151,6 @@ func TestEvaluateAffectedServicesList(t *testing.T) {
 	g.AddCall("auth", "backend", 3, false)
 	report := Evaluate(g, "backend", pb.RemediationAction_POD_RESTART, 10)
 
-	// Affected services should include frontend and auth (upstreams)
 	found := make(map[string]bool)
 	for _, s := range report.AffectedServices {
 		found[s] = true

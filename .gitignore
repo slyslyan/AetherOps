@@ -36,9 +36,20 @@ tmp/
 !*_bpfel.o
 !*_bpfeb.o
 
-# Python cache
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Python runtime data
+python/data/
+aetherops/data/
 
 # Local binaries
 tracer-mcp
@@ -49,3 +60,13 @@ project-log.md
 qs.md
 weilai.md
 interview-qa.md
+
+# Runtime data
+data/
+aetherops/data/
+
+# Build artifacts
+/tracer
+/ebpf-local
+/tracer-mcp
+tools/s.py

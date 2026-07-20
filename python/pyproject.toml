@@ -3,7 +3,7 @@ name = "aetherops"
 version = "0.1.0"
 description = "AetherOps — AI-driven intelligent operations agent"
 authors = ["AetherOps Team"]
-packages = [{include = "*"}]
+packages = [{include = "aetherops", from = "src"}]
 
 [tool.poetry.scripts]
 aetherops = "aetherops.main:main"

@@ -1,4 +1,4 @@
-package mitigation
+package remediation
 
 import (
 	"bytes"

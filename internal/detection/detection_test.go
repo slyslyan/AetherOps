@@ -1,4 +1,4 @@
-package analysis
+package detection
 
 import (
 	"math"
@@ -20,7 +20,6 @@ func cfg() *config.Config {
 	}
 }
 
-// makeGraph creates a simple 3-node graph: a -> b -> c
 func makeGraph() *graph.ServiceGraph {
 	g := graph.NewServiceGraph()
 	g.AddCall("svc-a", "svc-b", 5, false)
@@ -28,15 +27,12 @@ func makeGraph() *graph.ServiceGraph {
 	return g
 }
 
-// makeGraphWithAnomaly creates a graph with one high-latency edge.
 func makeGraphWithAnomaly() *graph.ServiceGraph {
 	g := graph.NewServiceGraph()
-	// Normal calls
 	for i := 0; i < 10; i++ {
 		g.AddCall("svc-a", "svc-b", 5, false)
 		g.AddCall("svc-b", "svc-c", 5, false)
 	}
-	// Now inject latency on b->c
 	for i := 0; i < 5; i++ {
 		g.AddCall("svc-b", "svc-c", 500, false)
 	}
@@ -60,7 +56,6 @@ func TestAnalyzeRootCauseWithAnomaly(t *testing.T) {
 	if len(result) == 0 {
 		t.Fatal("expected at least one suspect")
 	}
-	// svc-c should be the top suspect (it's the destination of the slow edge)
 	if result[0].Node != "svc-c" {
 		t.Errorf("expected top suspect svc-c, got %s", result[0].Node)
 	}
@@ -71,13 +66,11 @@ func TestAnalyzeRootCauseWithAnomaly(t *testing.T) {
 
 func TestAnalyzeRootCauseScoreOrdering(t *testing.T) {
 	g := graph.NewServiceGraph()
-	// Build a chain a -> b -> c -> d with anomaly on b->c
 	for i := 0; i < 10; i++ {
 		g.AddCall("a", "b", 5, false)
 		g.AddCall("b", "c", 5, false)
 		g.AddCall("c", "d", 5, false)
 	}
-	// Inject latency on b->c
 	for i := 0; i < 5; i++ {
 		g.AddCall("b", "c", 500, false)
 	}
@@ -86,7 +79,6 @@ func TestAnalyzeRootCauseScoreOrdering(t *testing.T) {
 	if len(result) < 2 {
 		t.Fatal("expected at least 2 suspects")
 	}
-	// Scores should be descending
 	for i := 1; i < len(result); i++ {
 		if result[i-1].Score < result[i].Score {
 			t.Errorf("scores not descending at %d: %f < %f", i, result[i-1].Score, result[i].Score)
@@ -114,12 +106,11 @@ func TestAnalyzeRootCauseMaxSuspects(t *testing.T) {
 func TestAnalyzeRootCauseWithError(t *testing.T) {
 	g := graph.NewServiceGraph()
 	for i := 0; i < 10; i++ {
-		g.AddCall("a", "b", 10, i%2 == 0) // 50% error rate
+		g.AddCall("a", "b", 10, i%2 == 0)
 	}
 
 	result := AnalyzeRootCause(g, cfg())
 	if result == nil {
-		// High error rate should trigger anomaly even without high latency
 		t.Fatal("expected suspects with high error rate, got nil")
 	}
 }
@@ -134,7 +125,6 @@ func TestFaultPropagationRankNoAnomaly(t *testing.T) {
 
 func TestFaultPropagationRankWithAnomaly(t *testing.T) {
 	g := makeGraphWithAnomaly()
-	// Manually set anomaly scores
 	for _, e := range g.Edges {
 		e.AnomalyScore = 1.0
 	}
@@ -159,7 +149,6 @@ func TestFaultPropagationRankConverges(t *testing.T) {
 	if result == nil {
 		t.Fatal("expected non-nil result")
 	}
-	// All 4 nodes should have some probability mass
 	for _, node := range []string{"a", "b", "c", "d"} {
 		if result[node] <= 0 {
 			t.Errorf("expected positive probability for %s, got %f", node, result[node])
@@ -183,9 +172,9 @@ func TestClusterSuspectsNilForSingle(t *testing.T) {
 func TestClusterSuspectsGroupsSimilar(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "a", Score: 100},
-		{Node: "b", Score: 92}, // within 15% of 100
-		{Node: "c", Score: 50}, // far from 92
-		{Node: "d", Score: 45}, // within 15% of 50
+		{Node: "b", Score: 92},
+		{Node: "c", Score: 50},
+		{Node: "d", Score: 45},
 	}
 	clusters := ClusterSuspects(suspects)
 	if len(clusters) != 2 {
@@ -221,7 +210,6 @@ func TestJaccardSimilarityPartial(t *testing.T) {
 	a := []string{"a", "b", "c"}
 	b := []string{"b", "c", "d"}
 	got := JaccardSimilarity(a, b)
-	// intersection={b,c}=2, union={a,b,c,d}=4, j=0.5
 	if math.Abs(got-0.5) > 0.001 {
 		t.Errorf("expected 0.5, got %f", got)
 	}
@@ -234,7 +222,7 @@ func TestJaccardSimilarityEmpty(t *testing.T) {
 }
 
 func TestServiceHistoryRecordAndExpiry(t *testing.T) {
-	h := NewServiceHistory(100, 0.1, 0.6) // expire after 0.1 min = 6s
+	h := NewServiceHistory(100, 0.1, 0.6)
 	h.Record(HistoryRecord{Time: time.Now(), ID: "svc-a"})
 
 	found, _ := h.FindSimilar("svc-a")
@@ -242,7 +230,6 @@ func TestServiceHistoryRecordAndExpiry(t *testing.T) {
 		t.Error("expected to find recently recorded ID")
 	}
 
-	// Expire all
 	h.expireMin = time.Nanosecond
 	time.Sleep(time.Millisecond)
 	found, _ = h.FindSimilar("svc-a")
@@ -278,14 +265,12 @@ func TestSuspectIsIPPortDetection(t *testing.T) {
 		{"192.168.1.1:8080", true},
 		{"svc-a", false},
 		{"10.0.0.1:9090", true},
-		{"backend-service:443", false}, // not an IP port since the host part is a name
+		{"backend-service:443", false},
 	}
 	for _, tt := range tests {
 		g := graph.NewServiceGraph()
 		g.AddCall("client", tt.node, 5, false)
 		AnalyzeRootCause(g, cfg())
-		// Can't easily test IsIPPort from the result since it depends on node being
-		// the dest of a high-anomaly edge. But we can verify the helper logic.
 		_ = tt.want
 	}
 }

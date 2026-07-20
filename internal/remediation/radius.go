@@ -1,4 +1,4 @@
-package blastradius
+package remediation
 
 import (
 	"fmt"

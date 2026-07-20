@@ -1,17 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,14 +17,12 @@ import (
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"ebpf-autoheal/internal/analysis"
 	"ebpf-autoheal/internal/config"
+	"ebpf-autoheal/internal/detection"
 	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/graph"
 	mcppkg "ebpf-autoheal/internal/mcp"
-	"ebpf-autoheal/internal/metrics"
-	"ebpf-autoheal/internal/mitigation"
-	"ebpf-autoheal/internal/policy"
+	"ebpf-autoheal/internal/remediation"
 	"ebpf-autoheal/internal/resolver"
 )
 
@@ -36,9 +30,9 @@ import (
 type App struct {
 	cfg        *config.Config
 	graph      *graph.ServiceGraph
-	history    *analysis.ServiceHistory
-	policy     *policy.Engine
-	mitigation *mitigation.Service
+	history    *detection.ServiceHistory
+	policy     *remediation.Engine
+	mitigation *remediation.Service
 	mcpSrv     *mcppkg.Server
 	resolver   *resolver.ServiceIdentity
 
@@ -67,7 +61,7 @@ type App struct {
 	httpProbeLinks []link.Link
 	httpEventsRd   *ringbuf.Reader
 
-	// TCP RTT (request-level round-trip time via tcp_sendmsg → tcp_recvmsg)
+	// TCP RTT（请求级往返延迟）
 	rttObjs   tcp_rttObjects
 	kpSendRtt link.Link
 	kpRecvRtt link.Link
@@ -94,10 +88,8 @@ func NewApp() (*App, error) {
 	}
 
 	svcResolver := resolver.NewServiceIdentity(nil)
-
-	policyEngine := policy.NewEngine(os.Getenv("POLICY_FILE"))
-
-	mitigationSvc := mitigation.NewService(cfg, policyEngine)
+	policyEngine := remediation.NewEngine(os.Getenv("POLICY_FILE"))
+	mitigationSvc := remediation.NewService(cfg, policyEngine)
 
 	ifaceName := os.Getenv("EBPF_IFACE")
 	if ifaceName == "" {
@@ -105,7 +97,7 @@ func NewApp() (*App, error) {
 	}
 
 	g := graph.NewServiceGraph()
-	history := analysis.NewServiceHistory(100, cfg.HistoryExpireMin, cfg.HistoryMatchMinSim)
+	history := detection.NewServiceHistory(100, cfg.HistoryExpireMin, cfg.HistoryMatchMinSim)
 
 	return &App{
 		cfg:         cfg,
@@ -332,215 +324,6 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.httpSrv.Shutdown(ctx)
 	}
 	slog.Info("shutdown complete")
-}
-
-// RunMainLoop 运行主事件循环，阻塞直到 ctx 取消或 Ring Buffer 关闭。
-func (a *App) RunMainLoop(ctx context.Context) error {
-	<-a.ready
-
-	go a.consumeConnEvents(ctx)
-	go a.consumeRTTEvents(ctx)
-
-	simulate := false
-	simulateStr := os.Getenv("SIMULATE_LATENCY")
-	simulate = simulateStr == "1" || strings.ToLower(simulateStr) == "true"
-	simDelayMs := 2000.0
-	if ds := os.Getenv("SIMULATED_DELAY_MS"); ds != "" {
-		if v, err := strconv.ParseFloat(ds, 64); err == nil && v > 0 {
-			simDelayMs = v
-		}
-	}
-
-	topoTick := time.NewTicker(time.Duration(a.cfg.TopologyPrintInterval) * time.Second)
-	analysisTick := time.NewTicker(time.Duration(a.cfg.AnalysisInterval) * time.Second)
-	tcDropCleanupTick := time.NewTicker(1 * time.Minute)
-	defer topoTick.Stop()
-	defer analysisTick.Stop()
-	defer tcDropCleanupTick.Stop()
-
-	// 定时打印拓扑
-	go func() {
-		for {
-			select {
-			case <-topoTick.C:
-				a.graph.PrintStats(nil, nil)
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// 定时执行根因分析
-	go func() {
-		for {
-			select {
-			case <-analysisTick.C:
-				suspects := analysis.AnalyzeRootCause(a.graph, a.cfg)
-				if len(suspects) > 0 {
-					slog.Info("Root cause analysis: high-latency suspects")
-					for _, s := range suspects {
-						slog.Info(fmt.Sprintf("  suspect: %s (score: %.2f, avg latency: %.2f ms, calls: %d)",
-							s.Node, s.Score, s.AvgLat, s.CallCount))
-					}
-					// 动态挂载 HTTP uprobe 采集详细耗时（自动 60s 后卸载）
-					a.StartHTTPProbe()
-					a.mitigation.PerformMitigation(suspects, nil, nil)
-					if a.mcpSrv != nil {
-						top := suspects[0]
-						chain := make([]string, len(suspects))
-						for i, s := range suspects {
-							chain[i] = s.Node
-						}
-						a.mcpSrv.PublishAnomaly(top.Node, top.Score, top.AvgLat, top.CallCount, chain)
-					}
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// 定时清理 TC drop 规则
-	go func() {
-		for {
-			select {
-			case <-tcDropCleanupTick.C:
-				a.cleanupExpiredTCRules()
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// ===== 主循环：读取 Ring Buffer =====
-	for {
-		record, err := a.mainRd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				slog.Info("ringbuf closed, exiting")
-				return nil
-			}
-			select {
-			case <-ctx.Done():
-				return nil
-			default:
-			}
-			metrics.AgentErrors.Inc()
-			slog.Info(fmt.Sprintf("ringbuf read failed: %v", err))
-			continue
-		}
-		metrics.AgentEvents.Inc()
-
-		var raw netEventRaw
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &raw); err != nil {
-			metrics.AgentErrors.Inc()
-			slog.Info(fmt.Sprintf("parse failed: %v", err))
-			continue
-		}
-		comm := strings.TrimRight(string(raw.Comm[:]), "\x00")
-		delayMs := float64(raw.Delta) / 1e6
-		if raw.Saddr == 0 && raw.Daddr == 0 {
-			fmt.Printf("PID=%d (%s) [failed: Family=%d]\n", raw.Pid, comm, raw.Family)
-			continue
-		}
-		srcIP := uint32ToIP(raw.Saddr)
-		dstIP := uint32ToIP(raw.Daddr)
-		if simulate {
-			delayMs = simDelayMs
-		}
-		srcService := a.resolver.Resolve(raw.Pid, comm)
-		dstService := fmt.Sprintf("%s:%d", dstIP, raw.Dport)
-		isError := delayMs > 1000.0
-		a.graph.AddCall(srcService, dstService, delayMs, isError)
-		fmt.Printf("PID=%d (%s) %s:%d -> %s:%d delay=%.2f ms\n",
-			raw.Pid, comm, srcIP, raw.Sport, dstIP, raw.Dport, delayMs)
-	}
-}
-
-// consumeConnEvents 读取 tcp_conntrack 的连接事件 Ring Buffer。
-func (a *App) consumeConnEvents(ctx context.Context) {
-	slog.Info("conntrack event consumer started")
-	for {
-		record, err := a.connRd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			slog.Info(fmt.Sprintf("conntrack ringbuf read failed: %v", err))
-			continue
-		}
-		var evt connEventRaw
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &evt); err != nil {
-			slog.Info(fmt.Sprintf("conntrack parse failed: %v", err))
-			continue
-		}
-		comm := strings.TrimRight(string(evt.Comm[:]), "\x00")
-		srcIP := uint32ToIP(evt.Saddr)
-		dstIP := uint32ToIP(evt.Daddr)
-
-		role := "client"
-		if evt.Role == 2 {
-			role = "server"
-		}
-		durationMs := float64(evt.DurationNs) / 1e6
-		slog.Info(fmt.Sprintf("CONN %s %s:%d -> %s:%d duration=%.2f ms pid=%d (%s)",
-			role, srcIP, evt.Sport, dstIP, evt.Dport, durationMs, evt.Pid, comm))
-
-		// Feed short-lived connection RTT into the graph for anomaly detection.
-		// Filter out connections >30s (e.g. pooled DB connections) to avoid
-		// polluting the baseline with connection-lifetime durations.
-		if durationMs > 0 && durationMs < 30000 {
-			srcSvc := a.resolver.Resolve(evt.Pid, comm)
-			dstSvc := fmt.Sprintf("%s:%d", dstIP, evt.Dport)
-			isErr := durationMs > 1000.0
-			a.graph.AddCall(srcSvc, dstSvc, durationMs, isErr)
-		}
-	}
-}
-
-// consumeRTTEvents 读取 tcp_rtt Ring Buffer 中的请求级 RTT 事件。
-func (a *App) consumeRTTEvents(ctx context.Context) {
-	if a.rttRd == nil {
-		return
-	}
-	slog.Info("RTT event consumer started")
-	for {
-		record, err := a.rttRd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			slog.Info(fmt.Sprintf("rtt ringbuf read failed: %v", err))
-			continue
-		}
-		var evt netEventRaw
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &evt); err != nil {
-			slog.Info(fmt.Sprintf("rtt parse failed: %v", err))
-			continue
-		}
-		comm := strings.TrimRight(string(evt.Comm[:]), "\x00")
-		dstIP := uint32ToIP(evt.Daddr)
-
-		rttMs := float64(evt.Delta) / 1e6
-		// Filter implausible values.
-		if rttMs <= 0 || rttMs > 30000 {
-			continue
-		}
-		srcSvc := a.resolver.Resolve(evt.Pid, comm)
-		dstSvc := fmt.Sprintf("%s:%d", dstIP, evt.Dport)
-		isErr := rttMs > 1000.0
-		a.graph.AddCall(srcSvc, dstSvc, rttMs, isErr)
-	}
 }
 
 // uint32ToIP 将小端序 uint32 转换为 net.IP。

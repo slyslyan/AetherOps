@@ -1,4 +1,4 @@
-package analysis
+package detection
 
 import (
 	"fmt"
@@ -13,13 +13,6 @@ import (
 )
 
 // AnalyzeRootCause 在图上执行完整的根因分析流程。
-//
-// 参数说明:
-//
-//	g   - 服务拓扑图
-//	cfg - 配置参数
-//
-// 返回嫌疑节点列表，按分数从高到低排列。没有异常时返回 nil。
 func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspicion {
 	g.RLock()
 	defer g.RUnlock()

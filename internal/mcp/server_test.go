@@ -4,8 +4,7 @@ import (
 	"testing"
 
 	"ebpf-autoheal/internal/graph"
-	"ebpf-autoheal/internal/mitigation"
-	"ebpf-autoheal/internal/policy"
+	"ebpf-autoheal/internal/remediation"
 )
 
 func TestNewServer(t *testing.T) {
@@ -23,8 +22,8 @@ func TestNewServer(t *testing.T) {
 
 func TestNewServerWithDependencies(t *testing.T) {
 	g := graph.NewServiceGraph()
-	pe := policy.NewEngine("")
-	ms := mitigation.NewService(nil, pe)
+	pe := remediation.NewEngine("")
+	ms := remediation.NewService(nil, pe)
 	cfg := Config{ProfileDurationSec: 15}
 
 	s := NewServer(":50052", g, ms, pe, cfg)

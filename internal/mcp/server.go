@@ -11,11 +11,9 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 
-	"ebpf-autoheal/internal/blastradius"
 	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/graph"
-	"ebpf-autoheal/internal/mitigation"
-	"ebpf-autoheal/internal/policy"
+	"ebpf-autoheal/internal/remediation"
 	pb "ebpf-autoheal/proto/gen"
 )
 
@@ -27,8 +25,8 @@ type Server struct {
 	addr  string
 
 	graph      *graph.ServiceGraph
-	mitigation *mitigation.Service
-	policy     *policy.Engine
+	mitigation *remediation.Service
+	policy     *remediation.Engine
 	cfg        Config
 }
 
@@ -38,7 +36,7 @@ type Config struct {
 }
 
 // NewServer 创建 MCP 服务。
-func NewServer(addr string, g *graph.ServiceGraph, mit *mitigation.Service, pol *policy.Engine, cfg Config) *Server {
+func NewServer(addr string, g *graph.ServiceGraph, mit *remediation.Service, pol *remediation.Engine, cfg Config) *Server {
 	mcpServer := server.NewMCPServer(
 		"AetherOps",
 		"1.0.0",
@@ -243,7 +241,7 @@ func (s *Server) handleEvaluateRemediation(ctx context.Context, req mcp.CallTool
 		return nil, fmt.Errorf("unknown action (%s): %w", action, apperrors.ErrMCPInvalidArgs)
 	}
 
-	report := blastradius.Evaluate(s.graph, targetNode, pb.RemediationAction(actionVal), s.cfg.ProfileDurationSec)
+	report := remediation.Evaluate(s.graph, targetNode, pb.RemediationAction(actionVal), s.cfg.ProfileDurationSec)
 	return mcp.NewToolResultStructuredOnly(map[string]interface{}{
 		"target_node":         report.TargetNode,
 		"action":              report.Action.String(),
@@ -273,7 +271,7 @@ func (s *Server) handleExecuteRemediation(ctx context.Context, req mcp.CallToolR
 		return nil, fmt.Errorf("unknown action (%s): %w", action, apperrors.ErrMCPInvalidArgs)
 	}
 
-	report := blastradius.Evaluate(s.graph, targetNode, pb.RemediationAction(actionVal), s.cfg.ProfileDurationSec)
+	report := remediation.Evaluate(s.graph, targetNode, pb.RemediationAction(actionVal), s.cfg.ProfileDurationSec)
 	execID := fmt.Sprintf("exec-%s-%d", targetNode, time.Now().Unix())
 
 	if !force && report.RiskLevel == pb.RiskLevel_RISK_HIGH {
@@ -309,8 +307,8 @@ func (s *Server) handleCheckPolicy(ctx context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultText(`{"allowed": true, "reason": "policy engine not initialized"}`), nil
 	}
 
-	result := s.policy.Check(policy.PolicyAction{
-		Action:     policy.RemediationActionType(pAction),
+	result := s.policy.Check(remediation.PolicyAction{
+		Action:     remediation.RemediationActionType(pAction),
 		TargetNode: targetNode,
 		TargetIP:   targetIP,
 		Namespace:  namespace,

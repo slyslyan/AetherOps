@@ -1,4 +1,4 @@
-package policy
+package remediation
 
 import (
 	"testing"
@@ -95,7 +95,6 @@ func TestCheckActionWarnedByRequireApproval(t *testing.T) {
 
 func TestCheckMaxConcurrentActions(t *testing.T) {
 	pe := NewEngine("")
-	// Default max-concurrent-tc-drop rule allows 5 concurrent TC_DROP
 	actions := make([]PolicyAction, 10)
 	for i := 0; i < 10; i++ {
 		actions[i] = PolicyAction{
@@ -104,17 +103,9 @@ func TestCheckMaxConcurrentActions(t *testing.T) {
 			Timestamp:  time.Now(),
 		}
 	}
-	// First 5 should be allowed, check the 6th
 	for i := 0; i < 6; i++ {
 		pe.Check(actions[i])
 	}
-	// 6th check - after 5 concurrent, the limit should NOT deny via cooldown alone
-	// because the cooldown logic only triggers if pe.cooldown[key] >= MaxConcurrentActions
-	// which is 5. But each Check increments. So after 5, the 6th would have cooldown[TC_DROP] = 5
-	// Wait, let me re-read the logic:
-	// The matchRule checks `if pe.cooldown[key] >= int64(cond.MaxConcurrentActions)`
-	// And pe.cooldown[key] is incremented in Check() only for the max-concurrent-tc-drop rule.
-	// So after 6 checks, cooldown["TC_DROP"] = 6, and MaxConcurrentActions = 5, so 6 >= 5 = true (denied).
 	result := pe.Check(actions[0])
 	if !result.Denied {
 		t.Error("expected 6th concurrent TC_DROP to be denied by max-concurrent")
@@ -140,7 +131,7 @@ func TestCheckScaleDownDeniedByMaxReplica(t *testing.T) {
 		Action:      ActionScaleDown,
 		TargetNode:  "my-app",
 		Replicas:    10,
-		ScaleChange: 3, // 30% > 20% max
+		ScaleChange: 3,
 		Timestamp:   time.Now(),
 	}
 	result := pe.Check(action)
@@ -158,8 +149,6 @@ func TestCheckMultipleRules(t *testing.T) {
 		Timestamp:  time.Now(),
 	}
 	result := pe.Check(action)
-	// mysql matches both protect-critical-data-services AND max-replica-restart
-	// At minimum, it should be denied
 	if !result.Denied {
 		t.Error("expected POD_RESTART on mysql to be denied")
 	}
@@ -219,23 +208,18 @@ func TestMatchAnyPattern(t *testing.T) {
 
 func TestCheckBeforeMitigationSingle(t *testing.T) {
 	pe := NewEngine("")
-	// protect-control-plane blocks TC_DROP when namespace can't be determined.
 	result := pe.CheckBeforeMitigation(graph.Suspicion{Node: "192.168.1.100:8080", IsIPPort: true})
-	// Policy guard returns false when denied — verify it doesn't panic.
 	_ = result
 }
 
 func TestMatchRuleActionOnly(t *testing.T) {
 	pe := NewEngine("")
-	// A rule that only specifies actions, no other conditions, should match
-	rule := pe.rules[0] // max-replica-restart: actions=[POD_RESTART, SCALE_DOWN]
+	rule := pe.rules[0]
 	action := PolicyAction{
 		Action:     ActionPodRestart,
 		TargetNode: "anything",
 		Timestamp:  time.Now(),
 	}
-	// If the action matches, and there are no non-action conditions,
-	// matchRule should return true
 	matched := pe.matchRule(rule, action)
 	if !matched {
 		t.Error("expected rule to match when action matches and no non-action conditions")
@@ -246,7 +230,7 @@ func TestMatchRuleNonMatchingAction(t *testing.T) {
 	pe := NewEngine("")
 	rule := pe.rules[0]
 	action := PolicyAction{
-		Action:     ActionTCPDrop, // rule has POD_RESTART, SCALE_DOWN
+		Action:     ActionTCPDrop,
 		TargetNode: "anything",
 		Timestamp:  time.Now(),
 	}
@@ -276,7 +260,6 @@ func TestParseIntOrZero(t *testing.T) {
 }
 
 func TestIsTimeBlockedNoDays(t *testing.T) {
-	// No day restriction should block any day
 	blocked := isTimeBlocked([]string{"00:00-23:59"}, nil)
 	if !blocked {
 		t.Error("expected 00:00-23:59 range to always block")
@@ -284,11 +267,8 @@ func TestIsTimeBlockedNoDays(t *testing.T) {
 }
 
 func TestIsTimeBlockedNonMatchingDay(t *testing.T) {
-	// If the block days don't include today, it shouldn't block
-	// This test might be flaky if today is Saturday/Sunday... but default days are Mon-Fri
 	blocked := isTimeBlocked([]string{"09:00-18:00"}, []string{"Saturday", "Sunday"})
 	if blocked {
 		t.Log("Note: today might be Saturday or Sunday, so this might correctly block")
 	}
-	// Accept either result since it depends on current day
 }

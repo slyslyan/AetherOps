@@ -1,4 +1,4 @@
-package mitigation
+package remediation
 
 import (
 	"os"
@@ -87,12 +87,10 @@ func TestOutputFile(t *testing.T) {
 func TestCleanupOldOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 
-	// Create old file
 	oldFile := filepath.Join(tmpDir, "old.txt")
 	os.WriteFile(oldFile, []byte("old"), 0644)
 	os.Chtimes(oldFile, time.Now().Add(-2*time.Hour), time.Now().Add(-2*time.Hour))
 
-	// Create new file
 	newFile := filepath.Join(tmpDir, "new.txt")
 	os.WriteFile(newFile, []byte("new"), 0644)
 
@@ -100,11 +98,9 @@ func TestCleanupOldOutput(t *testing.T) {
 	s.outputDir = tmpDir
 	s.cleanupOldOutput()
 
-	// Old file should be deleted
 	if _, err := os.Stat(oldFile); !os.IsNotExist(err) {
 		t.Errorf("expected old file to be deleted")
 	}
-	// New file should still exist
 	if _, err := os.Stat(newFile); err != nil {
 		t.Errorf("expected new file to still exist: %v", err)
 	}
@@ -112,7 +108,6 @@ func TestCleanupOldOutput(t *testing.T) {
 
 func TestPerformMitigationNoSuspects(t *testing.T) {
 	s := NewService(newTestConfig(), mockPolicyChecker{})
-	// Should not panic
 	s.PerformMitigation(nil, nil, nil)
 }
 
@@ -121,7 +116,6 @@ func TestPerformMitigationPolicyDenied(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "192.168.1.1:8080", Score: 95, IsIPPort: true},
 	}
-	// Should not panic and not execute anything
 	s.PerformMitigation(suspects, nil, nil)
 }
 
@@ -130,7 +124,6 @@ func TestPerformMitigationNonIPNode(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "my-service", Score: 95, IsIPPort: false},
 	}
-	// Should not panic, just log and skip
 	s.PerformMitigation(suspects, nil, nil)
 }
 
@@ -139,7 +132,6 @@ func TestPerformMitigationProtectedIP(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "127.0.0.1:8080", Score: 95, IsIPPort: true},
 	}
-	// Should not attempt TC drop on 127.0.0.1
 	s.PerformMitigation(suspects, nil, nil)
 }
 
@@ -148,7 +140,6 @@ func TestPerformMitigationInvalidIP(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "not-an-ip:8080", Score: 95, IsIPPort: true},
 	}
-	// Should not make HTTP requests to invalid IP
 	s.PerformMitigation(suspects, nil, nil)
 }
 

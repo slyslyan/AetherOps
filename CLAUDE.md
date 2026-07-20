@@ -17,6 +17,45 @@ Go 数据面: eBPF kprobe → Ring Buffer → ServiceGraph → 异常检测 → 
 Python 认知面: MCP Client → Supervisor → 5 Expert Agents → LLM Diagnosis → 分级自愈 + 恢复验证
 ```
 
+### Go 目录结构
+
+```
+cmd/tracer/          应用入口（app.go, loop.go, collector.go）
+internal/
+  config/            配置加载（env → Config struct）
+  detection/         根因分析（异常分数 + 反向随机游走 + 故障聚类）
+  errors/            错误哨兵（ErrEBPFLoad, ErrKprobeAttach 等）
+  graph/             服务拓扑图（ServiceGraph + ServiceEdge + Suspicion）
+  mcp/               MCP JSON-RPC over HTTP SSE 服务
+  metrics/           Prometheus 指标（agent_events, agent_errors）
+  remediation/       自愈执行（mitigation）+ 策略引擎（policy）+ 爆炸半径评估（blastradius）
+  resolver/          服务名解析（PID → 进程名）
+bpf/                 eBPF C 程序（net_trace.c, tcp_conntrack.c, tcp_rtt.c, tc_drop.c, http_probe.c）
+proto/               Protobuf 定义（aetherops.proto → gen/）
+```
+
+### Python 目录结构
+
+```
+python/
+  src/aetherops/
+    core/            MCP 客户端 + LLM Provider + LLM 诊断 + 风险评估 + 告警关联 + 反馈
+    workflows/       Multi-Agent 工作流（Planner → Supervisor → 5 Expert Agents）
+  tests/             测试（pytest + asyncio）
+  scripts/demo.py    面试演示脚本
+  pyproject.toml     Poetry 项目配置（src-layout）
+  Dockerfile         Python 认知平面容器镜像
+```
+
+### 部署配置
+
+```
+docker/              Go tracer Dockerfiles（Dockerfile.agent, Dockerfile.local）
+deploy/              K8s manifests + Helm chart + 安装脚本
+config/              Prometheus + Grafana 监控配置
+docker-compose.aetherops.yml  一键启动认知平面 + Prometheus + Grafana
+```
+
 ## 已删除模块（面试不展开，不要重建）
 
 以下模块已在简化中删除：chaos/、benchmark/、causal_inference.py、multi_turn_diagnosis.py、metrics_fetcher.py、hooks.py、agent_observability.py、incident_memory.py
@@ -27,7 +66,7 @@ Python 认知面: MCP Client → Supervisor → 5 Expert Agents → LLM Diagnosi
 - `workflows.workflow.run_workflow(workflow, state)` → dict
 - `core.llm_provider.ProviderFactory.from_env()` → LLMProvider
 - `core.mcp_client.MCPClient` — MCP 客户端
-- `mitigation.PolicyChecker.CheckBeforeMitigation(suspect graph.Suspicion) bool` — 单嫌疑节点接口（非切片）
+- `remediation.PolicyChecker.CheckBeforeMitigation(suspect graph.Suspicion) bool` — 单嫌疑节点接口（非切片）
 
 ## eBPF 探针架构
 

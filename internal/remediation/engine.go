@@ -1,4 +1,4 @@
-package policy
+package remediation
 
 import (
 	"encoding/json"

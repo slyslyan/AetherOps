@@ -11,11 +11,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip install --no-cache-dir poetry
 
 # Copy project files
-COPY pyproject.toml .
+COPY pyproject.toml poetry.lock ./
 RUN poetry config virtualenvs.create false && poetry install --no-interaction --no-ansi
 
 # Copy source code
-COPY . .
+COPY src/ ./src/
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
