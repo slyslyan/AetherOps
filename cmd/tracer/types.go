@@ -29,6 +29,42 @@ type connEventRaw struct {
 	Pad2       [4]byte  // 填充
 }
 
+// redisEventRaw 对应 eBPF redis_trace.c 中的 redis_event 结构体（40 字节）。
+type redisEventRaw struct {
+	Pid        uint32    // 进程 ID
+	DataLen    uint32    // payload 大小
+	TimestampNs uint64   // 时间戳（纳秒）
+	Command    [16]byte  // RESP 命令名（GET/SET/MGET...）
+	Pad        [4]byte   // 填充，Pad[0]=命令ID
+}
+
+// protoEventRaw 对应 eBPF proto_classifier.c 中的 proto_event 结构体（32 字节）。
+type protoEventRaw struct {
+	Saddr         uint32
+	Daddr         uint32
+	Sport         uint16
+	Dport         uint16
+	DetectedProto uint8
+	Confidence    uint8
+	Pad           [2]byte
+	Pid           uint32
+	Comm          [16]byte
+}
+
+// traceEventRaw 对应 eBPF trace_context.c 中的 ebpf_trace_event 结构体（48 字节）。
+type traceEventRaw struct {
+	Saddr       uint32
+	Daddr       uint32
+	Sport       uint16
+	Dport       uint16
+	Pid         uint32
+	TimestampNs uint64
+	TraceID     [16]byte
+	SpanID      [8]byte
+	TraceSource uint8
+	Pad         [3]byte
+}
+
 // httpEventRaw 对应 eBPF http_probe.c 中的 http_event 结构体。
 type httpEventRaw struct {
 	Pid         uint32    // 进程 ID

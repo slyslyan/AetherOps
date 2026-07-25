@@ -14,8 +14,8 @@ import (
 
 // AnalyzeRootCause 在图上执行完整的根因分析流程。
 func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspicion {
-	g.RLock()
-	defer g.RUnlock()
+	g.Lock()
+	defer g.Unlock()
 
 	// 第 1 步：计算每条边的异常分数
 	for _, e := range g.Edges {

@@ -80,6 +80,16 @@ var (
 		},
 		[]string{"method", "status"},
 	)
+
+	// ===== 协议解析指标 =====
+
+	RedisCommands = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ebpf_redis_commands_total",
+			Help: "Total number of Redis commands observed via eBPF",
+		},
+		[]string{"command"},
+	)
 )
 
 // ===== 自监控指标 =====
@@ -99,6 +109,64 @@ var (
 		Name: "ebpf_agent_up",
 		Help: "1 if agent is running",
 	})
+
+	RingbufEvents = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ebpf_ringbuf_events_total",
+			Help: "Total events read from each ring buffer",
+		},
+		[]string{"buffer"},
+	)
+
+	RingbufDropped = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ebpf_ringbuf_dropped_total",
+			Help: "Events dropped by ring buffer",
+		},
+		[]string{"buffer"},
+	)
+
+	RingbufReadErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ebpf_ringbuf_read_errors_total",
+			Help: "Read errors from ring buffer",
+		},
+		[]string{"buffer"},
+	)
+
+	DecisionLatency = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Name:    "ebpf_decision_latency_ms",
+			Help:    "End-to-end latency from eBPF event to remediation decision",
+			Buckets: []float64{10, 50, 100, 250, 500, 1000, 2500, 5000, 10000, 30000},
+		},
+	)
+
+	MCPConnections = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ebpf_mcp_connections",
+		Help: "Number of active MCP client connections",
+	})
+
+	MCPToolCalls = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "ebpf_mcp_tool_calls_total",
+			Help: "Total MCP tool calls by tool name",
+		},
+		[]string{"tool"},
+	)
+
+	EventsPerSecond = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "ebpf_events_per_second",
+		Help: "Current eBPF event throughput",
+	})
+
+	ComponentHealth = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "ebpf_agent_health",
+			Help: "Component health status (1=healthy, 0=unhealthy)",
+		},
+		[]string{"component"},
+	)
 )
 
 func init() {
@@ -111,7 +179,16 @@ func init() {
 	prometheus.MustRegister(Mitigation)
 	prometheus.MustRegister(HTTPTotal)
 	prometheus.MustRegister(HTTPLatency)
+	prometheus.MustRegister(RedisCommands)
 	prometheus.MustRegister(AgentEvents)
 	prometheus.MustRegister(AgentErrors)
 	prometheus.MustRegister(AgentUp)
+	prometheus.MustRegister(RingbufEvents)
+	prometheus.MustRegister(RingbufDropped)
+	prometheus.MustRegister(RingbufReadErrors)
+	prometheus.MustRegister(DecisionLatency)
+	prometheus.MustRegister(MCPConnections)
+	prometheus.MustRegister(MCPToolCalls)
+	prometheus.MustRegister(EventsPerSecond)
+	prometheus.MustRegister(ComponentHealth)
 }

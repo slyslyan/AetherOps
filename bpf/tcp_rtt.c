@@ -58,7 +58,15 @@ struct {
     __type(value, __u64);
 } rtt_rate_limit SEC(".maps");
 
-const __u64 rtt_sampling_interval_ns = 100000; // 100 µs — RTT events are sparser than sendmsg
+// 采样配置 map（用户态可写）
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} rtt_sampling_config SEC(".maps");
+
+const __u64 rtt_default_interval_ns = 100000; // 默认 100 µs
 
 static __u64 rtt_flow_key(__u32 saddr, __u32 daddr, __u16 sport, __u16 dport) {
     return (__u64)saddr ^ (__u64)daddr ^ ((__u64)sport << 16) ^ (__u64)dport;
@@ -68,7 +76,10 @@ static int rtt_should_sample(__u32 saddr, __u32 daddr, __u16 sport, __u16 dport)
     __u64 key = rtt_flow_key(saddr, daddr, sport, dport);
     __u64 *last = bpf_map_lookup_elem(&rtt_rate_limit, &key);
     __u64 now = bpf_ktime_get_ns();
-    if (last && (now - *last) < rtt_sampling_interval_ns) return 0;
+    __u32 cfg_key = 0;
+    __u64 *interval_ptr = bpf_map_lookup_elem(&rtt_sampling_config, &cfg_key);
+    __u64 interval_ns = interval_ptr ? *interval_ptr : rtt_default_interval_ns;
+    if (last && (now - *last) < interval_ns) return 0;
     __u64 val = now;
     bpf_map_update_elem(&rtt_rate_limit, &key, &val, BPF_ANY);
     return 1;

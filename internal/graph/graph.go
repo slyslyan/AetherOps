@@ -52,6 +52,22 @@ type ServiceEdge struct {
 	LastCount   int64
 	CallEma     float64
 	CallAnomaly float64
+
+	// Protocol 标注此边的应用协议类型
+	Protocol string
+
+	// ProtocolCommands 统计各协议命令的计数（如 Redis GET:100, SET:50）
+	ProtocolCommands map[string]int64
+
+	// RecentTraces 最近的分布式追踪 Trace ID 列表（环形，最多 100 条）
+	RecentTraces []TraceContext
+}
+
+// TraceContext 分布式追踪上下文。
+type TraceContext struct {
+	TraceID    string
+	SpanID     string
+	TraceSource string // "w3c", "jaeger", "datadog", "generic"
 }
 
 // ServiceGraph 是完整的服务调用拓扑图。
@@ -107,11 +123,53 @@ func EdgeKey(src, dst string) string {
 	return src + "->" + dst
 }
 
+// AddProtocolCall 添加一次带协议信息的服务调用记录。
+func (g *ServiceGraph) AddProtocolCall(src, dst string, latencyMs float64, isError bool, protocol, cmd string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	g.addCallLocked(src, dst, latencyMs, isError)
+
+	key := EdgeKey(src, dst)
+	if e, ok := g.Edges[key]; ok {
+		if e.Protocol == "" {
+			e.Protocol = protocol
+		}
+		if e.ProtocolCommands == nil {
+			e.ProtocolCommands = make(map[string]int64)
+		}
+		if cmd != "" {
+			e.ProtocolCommands[cmd]++
+		}
+	}
+}
+
+// AddTraceContext 将 Trace 上下文关联到拓扑边。
+func (g *ServiceGraph) AddTraceContext(src, dst string, tc TraceContext) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	key := EdgeKey(src, dst)
+	e, ok := g.Edges[key]
+	if !ok {
+		return
+	}
+	const maxTraces = 100
+	if len(e.RecentTraces) >= maxTraces {
+		e.RecentTraces = e.RecentTraces[1:]
+	}
+	e.RecentTraces = append(e.RecentTraces, tc)
+}
+
 // AddCall 添加一次服务调用记录。
 func (g *ServiceGraph) AddCall(src, dst string, latencyMs float64, isError bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.addCallLocked(src, dst, latencyMs, isError)
+}
 
+// addCallLocked 假定调用者已持有 g.mu 写锁。
+func (g *ServiceGraph) addCallLocked(src, dst string, latencyMs float64, isError bool) {
 	g.getOrCreateNode(src)
 	g.getOrCreateNode(dst)
 
@@ -147,9 +205,6 @@ func (g *ServiceGraph) AddCall(src, dst string, latencyMs float64, isError bool)
 	}
 	e.P95 = Percentile(e.LatencyWindow, 95.0)
 
-	// Maintain stable BaselineP95 via EMA with anomaly gating.
-	// When the window P95 is near the baseline, slowly incorporate it.
-	// When it spikes (anomalous), freeze the baseline to avoid inflation.
 	if e.BaselineP95 == 0 {
 		e.BaselineP95 = e.P95
 	} else if e.P95 < e.BaselineP95*BaselineGateMultiplier {

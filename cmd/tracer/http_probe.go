@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -16,9 +17,6 @@ import (
 
 	"ebpf-autoheal/internal/metrics"
 )
-
-// httpProbeActive 标记 uprobe 是否已挂载（防止重复挂载）
-var httpProbeActive bool
 
 // initHTTPProbe 仅加载 eBPF 对象和 ringbuf reader，不挂载 uprobe。
 // uprobe 通过 StartHTTPProbe() 按需动态挂载。
@@ -46,7 +44,10 @@ func (a *App) initHTTPProbe(targetExe string) error {
 // StartHTTPProbe 动态挂载 HTTP/gRPC uprobe，采集详细耗时信息。
 // 1 分钟后自动卸载，避免持续 CPU 开销。重复调用无副作用。
 func (a *App) StartHTTPProbe() {
-	if httpProbeActive {
+	a.httpProbeMu.Lock()
+	defer a.httpProbeMu.Unlock()
+
+	if a.httpProbeActive {
 		return
 	}
 	targetExe := a.cfg.HTTPProbeTarget
@@ -85,20 +86,28 @@ func (a *App) StartHTTPProbe() {
 		slog.Info("gRPC uprobe: Invoke attached (on-demand)")
 	}
 
-	httpProbeActive = true
+	a.httpProbeActive = true
 	slog.Info("HTTP uprobe: on-demand tracing started, auto-detach in 60s")
 
 	// 60 秒后自动卸载，避免持续产生 CPU 开销
 	go func() {
 		time.Sleep(60 * time.Second)
-		a.closeHTTPProbe()
-		httpProbeActive = false
+		a.httpProbeMu.Lock()
+		defer a.httpProbeMu.Unlock()
+		a.closeHTTPProbeLocked()
+		a.httpProbeActive = false
 		slog.Info("HTTP uprobe: on-demand tracing ended, probes detached")
 	}()
 }
 
-// closeHTTPProbe 分离所有 uprobe 并释放资源。
+// closeHTTPProbe 分离所有 uprobe 并释放资源。调用者必须持有 httpProbeMu。
 func (a *App) closeHTTPProbe() {
+	a.httpProbeMu.Lock()
+	defer a.httpProbeMu.Unlock()
+	a.closeHTTPProbeLocked()
+}
+
+func (a *App) closeHTTPProbeLocked() {
 	for _, l := range a.httpProbeLinks {
 		l.Close()
 	}
@@ -111,19 +120,25 @@ func (a *App) closeHTTPProbe() {
 }
 
 // consumeHTTPEvents 持续读取 HTTP 事件 Ring Buffer。
-func (a *App) consumeHTTPEvents() {
+func (a *App) consumeHTTPEvents(ctx context.Context) {
 	if a.httpEventsRd == nil {
 		return
 	}
 	slog.Info("HTTP event consumer started")
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
 		record, err := a.httpEventsRd.Read()
 		if err != nil {
 			if errors.Is(err, ringbuf.ErrClosed) {
 				slog.Info("HTTP ringbuf closed, exiting")
 				return
 			}
-			slog.Info(fmt.Sprintf("HTTP ringbuf read failed: %v", err))
+			slog.Warn(fmt.Sprintf("HTTP ringbuf read failed: %v", err))
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		var evt httpEventRaw

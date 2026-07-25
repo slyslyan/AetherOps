@@ -8,6 +8,88 @@ import (
 	pb "ebpf-autoheal/proto/gen"
 )
 
+// BlastRadiusGate 爆炸半径门控结果。
+type BlastRadiusGate struct {
+	Allowed       bool
+	EscalateHuman bool
+	Reason        string
+}
+
+// affectedStats 返回 targetNode 的上下游服务数量和错误预算消耗百分比。
+func affectedStats(g *graph.ServiceGraph, targetNode string) (upCount, downCount int, budgetPct float64) {
+	for _, e := range g.Edges {
+		if e.Dst == targetNode {
+			upCount++
+		}
+		if e.Src == targetNode {
+			downCount++
+		}
+	}
+
+	totalCalls := int64(0)
+	nodeCalls := int64(0)
+	for _, e := range g.Edges {
+		totalCalls += e.Count
+		if e.Src == targetNode || e.Dst == targetNode {
+			nodeCalls += e.Count
+		}
+	}
+	if totalCalls > 0 {
+		budgetPct = float64(nodeCalls) / float64(totalCalls) * 100
+	}
+	return
+}
+
+// GateByBlastRadius 基于服务的上下游影响范围做自愈门控。
+// 阈值：上下游影响 > 20 服务 → 升级人工；> 10 → 拒绝自动执行。
+// 错误预算消耗 > 15% → 升级人工。
+func GateByBlastRadius(g *graph.ServiceGraph, targetNode string) BlastRadiusGate {
+	upCount, downCount, budgetPct := affectedStats(g, targetNode)
+	totalAffected := upCount + downCount
+
+	if totalAffected > 20 {
+		return BlastRadiusGate{
+			Allowed:       false,
+			EscalateHuman: true,
+			Reason: fmt.Sprintf(
+				"%s affects %d services (up=%d down=%d) > 20 — escalate to human",
+				targetNode, totalAffected, upCount, downCount,
+			),
+		}
+	}
+
+	if totalAffected > 10 {
+		return BlastRadiusGate{
+			Allowed:       false,
+			EscalateHuman: false,
+			Reason: fmt.Sprintf(
+				"%s affects %d services (up=%d down=%d) > 10 — auto-remediation denied",
+				targetNode, totalAffected, upCount, downCount,
+			),
+		}
+	}
+
+	if budgetPct > 15 {
+		return BlastRadiusGate{
+			Allowed:       true,
+			EscalateHuman: true,
+			Reason: fmt.Sprintf(
+				"%s error budget consumption %.1f%% > 15%% — escalate to human review",
+				targetNode, budgetPct,
+			),
+		}
+	}
+
+	return BlastRadiusGate{
+		Allowed:       true,
+		EscalateHuman: false,
+		Reason: fmt.Sprintf(
+			"%s affects %d services, budget %.1f%% — auto-remediation allowed",
+			targetNode, totalAffected, budgetPct,
+		),
+	}
+}
+
 // Evaluate computes the impact of taking an action on targetNode.
 func Evaluate(g *graph.ServiceGraph, targetNode string, action pb.RemediationAction, profileDurationSec int) *pb.RemediationReport {
 	report := &pb.RemediationReport{
@@ -36,17 +118,8 @@ func Evaluate(g *graph.ServiceGraph, targetNode string, action pb.RemediationAct
 	report.AffectedUpstreamCount = int32(len(affectedUp))
 	report.AffectedDownstreamCount = int32(len(affectedDown))
 
-	totalCalls := int64(0)
-	nodeCalls := int64(0)
-	for _, e := range g.Edges {
-		totalCalls += e.Count
-		if e.Src == targetNode || e.Dst == targetNode {
-			nodeCalls += e.Count
-		}
-	}
-	if totalCalls > 0 {
-		report.EstimatedErrorBudgetConsumption = float64(nodeCalls) / float64(totalCalls) * 100
-	}
+	_, _, budgetPct := affectedStats(g, targetNode)
+	report.EstimatedErrorBudgetConsumption = budgetPct
 	report.EstimatedDowntimeSeconds = float64(profileDurationSec + 5)
 
 	report.RiskLevel = assignRiskLevel(targetNode, action, report)

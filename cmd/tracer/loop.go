@@ -60,6 +60,11 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 			select {
 			case <-analysisTick.C:
 				suspects := detection.AnalyzeRootCause(a.graph, a.cfg)
+					expertMatches := detection.MatchExpertRules(a.graph)
+					for _, m := range expertMatches {
+						slog.Info(fmt.Sprintf("Expert rule: %s (%.2f) — %s: %s", m.RuleName, m.Severity, m.Node, m.Reason))
+					}
+				a.adjustSamplingOnAnomaly(suspects)
 				if len(suspects) > 0 {
 					slog.Info("Root cause analysis: high-latency suspects")
 					for _, s := range suspects {
@@ -67,7 +72,7 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 							s.Node, s.Score, s.AvgLat, s.CallCount))
 					}
 					a.StartHTTPProbe()
-					a.mitigation.PerformMitigation(suspects, nil, nil)
+					a.mitigation.PerformMitigation(suspects, a.graph, nil, nil)
 					if a.mcpSrv != nil {
 						top := suspects[0]
 						chain := make([]string, len(suspects))
@@ -109,15 +114,19 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 			default:
 			}
 			metrics.AgentErrors.Inc()
-			slog.Info(fmt.Sprintf("ringbuf read failed: %v", err))
+			metrics.RingbufReadErrors.WithLabelValues("main").Inc()
+			slog.Warn(fmt.Sprintf("ringbuf read failed: %v", err))
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		metrics.AgentEvents.Inc()
+		metrics.RingbufEvents.WithLabelValues("main").Inc()
 
 		var raw netEventRaw
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &raw); err != nil {
 			metrics.AgentErrors.Inc()
-			slog.Info(fmt.Sprintf("parse failed: %v", err))
+			metrics.RingbufReadErrors.WithLabelValues("main").Inc()
+			slog.Warn(fmt.Sprintf("parse failed: %v", err))
 			continue
 		}
 		comm := strings.TrimRight(string(raw.Comm[:]), "\x00")

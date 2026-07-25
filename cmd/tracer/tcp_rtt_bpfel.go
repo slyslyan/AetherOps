@@ -74,16 +74,17 @@ type tcp_rttProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tcp_rttMapSpecs struct {
-	RttEvents    *ebpf.MapSpec `ebpf:"rtt_events"`
-	RttRateLimit *ebpf.MapSpec `ebpf:"rtt_rate_limit"`
-	RttTrack     *ebpf.MapSpec `ebpf:"rtt_track"`
+	RttEvents         *ebpf.MapSpec `ebpf:"rtt_events"`
+	RttRateLimit      *ebpf.MapSpec `ebpf:"rtt_rate_limit"`
+	RttSamplingConfig *ebpf.MapSpec `ebpf:"rtt_sampling_config"`
+	RttTrack          *ebpf.MapSpec `ebpf:"rtt_track"`
 }
 
 // tcp_rttVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tcp_rttVariableSpecs struct {
-	RttSamplingIntervalNs *ebpf.VariableSpec `ebpf:"rtt_sampling_interval_ns"`
+	RttDefaultIntervalNs *ebpf.VariableSpec `ebpf:"rtt_default_interval_ns"`
 }
 
 // tcp_rttObjects contains all objects after they have been loaded into the kernel.
@@ -106,15 +107,17 @@ func (o *tcp_rttObjects) Close() error {
 //
 // It can be passed to loadTcp_rttObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tcp_rttMaps struct {
-	RttEvents    *ebpf.Map `ebpf:"rtt_events"`
-	RttRateLimit *ebpf.Map `ebpf:"rtt_rate_limit"`
-	RttTrack     *ebpf.Map `ebpf:"rtt_track"`
+	RttEvents         *ebpf.Map `ebpf:"rtt_events"`
+	RttRateLimit      *ebpf.Map `ebpf:"rtt_rate_limit"`
+	RttSamplingConfig *ebpf.Map `ebpf:"rtt_sampling_config"`
+	RttTrack          *ebpf.Map `ebpf:"rtt_track"`
 }
 
 func (m *tcp_rttMaps) Close() error {
 	return _Tcp_rttClose(
 		m.RttEvents,
 		m.RttRateLimit,
+		m.RttSamplingConfig,
 		m.RttTrack,
 	)
 }
@@ -123,7 +126,7 @@ func (m *tcp_rttMaps) Close() error {
 //
 // It can be passed to loadTcp_rttObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tcp_rttVariables struct {
-	RttSamplingIntervalNs *ebpf.Variable `ebpf:"rtt_sampling_interval_ns"`
+	RttDefaultIntervalNs *ebpf.Variable `ebpf:"rtt_default_interval_ns"`
 }
 
 // tcp_rttPrograms contains all programs after they have been loaded into the kernel.

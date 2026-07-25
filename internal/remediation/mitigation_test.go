@@ -108,7 +108,7 @@ func TestCleanupOldOutput(t *testing.T) {
 
 func TestPerformMitigationNoSuspects(t *testing.T) {
 	s := NewService(newTestConfig(), mockPolicyChecker{})
-	s.PerformMitigation(nil, nil, nil)
+	s.PerformMitigation(nil, nil, nil, nil)
 }
 
 func TestPerformMitigationPolicyDenied(t *testing.T) {
@@ -116,7 +116,7 @@ func TestPerformMitigationPolicyDenied(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "192.168.1.1:8080", Score: 95, IsIPPort: true},
 	}
-	s.PerformMitigation(suspects, nil, nil)
+	s.PerformMitigation(suspects, nil, nil, nil)
 }
 
 func TestPerformMitigationNonIPNode(t *testing.T) {
@@ -124,7 +124,7 @@ func TestPerformMitigationNonIPNode(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "my-service", Score: 95, IsIPPort: false},
 	}
-	s.PerformMitigation(suspects, nil, nil)
+	s.PerformMitigation(suspects, nil, nil, nil)
 }
 
 func TestPerformMitigationProtectedIP(t *testing.T) {
@@ -132,7 +132,7 @@ func TestPerformMitigationProtectedIP(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "127.0.0.1:8080", Score: 95, IsIPPort: true},
 	}
-	s.PerformMitigation(suspects, nil, nil)
+	s.PerformMitigation(suspects, nil, nil, nil)
 }
 
 func TestPerformMitigationInvalidIP(t *testing.T) {
@@ -140,7 +140,7 @@ func TestPerformMitigationInvalidIP(t *testing.T) {
 	suspects := []graph.Suspicion{
 		{Node: "not-an-ip:8080", Score: 95, IsIPPort: true},
 	}
-	s.PerformMitigation(suspects, nil, nil)
+	s.PerformMitigation(suspects, nil, nil, nil)
 }
 
 func TestRunWithTimeout(t *testing.T) {

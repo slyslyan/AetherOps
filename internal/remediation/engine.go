@@ -115,8 +115,8 @@ func NewEngine(policyFilePath string) *Engine {
 
 // Check 评估一个自愈动作是否通过所有策略。
 func (pe *Engine) Check(action PolicyAction) PolicyResult {
-	pe.mu.RLock()
-	defer pe.mu.RUnlock()
+	pe.mu.Lock()
+	defer pe.mu.Unlock()
 
 	result := PolicyResult{
 		Allowed:   true,
@@ -464,15 +464,37 @@ func (pe *Engine) CheckBeforeMitigation(suspect graph.Suspicion) bool {
 	return true
 }
 
-func auditLog(decision string, action PolicyAction, result PolicyResult) {
-	entry := map[string]interface{}{
-		"type":       "policy_audit",
-		"timestamp":  time.Now().UTC().Format(time.RFC3339),
-		"decision":   decision,
-		"action":     action,
-		"reasons":    result.Reasons,
-		"matched_by": result.MatchedBy,
-	}
+// AuditEntry 结构化审计日志条目。
+type AuditEntry struct {
+	Type        string              `json:"type"`
+	Timestamp   string              `json:"timestamp"`
+	Decision    string              `json:"decision"`
+	Action      RemediationActionType `json:"action"`
+	TargetNode  string              `json:"target_node"`
+	TargetIP    string              `json:"target_ip,omitempty"`
+	Reasons     []string            `json:"reasons"`
+	MatchedBy   []string            `json:"matched_by"`
+	MttrSec     float64             `json:"mttr_sec,omitempty"`
+	CanaryPhase string              `json:"canary_phase,omitempty"`
+	BlastRadius int                 `json:"blast_radius,omitempty"`
+	LockedBy    string              `json:"locked_by,omitempty"`
+}
+
+// AuditLog 记录结构化审计条目。
+func AuditLog(entry AuditEntry) {
+	entry.Type = "policy_audit"
+	entry.Timestamp = time.Now().UTC().Format(time.RFC3339)
 	data, _ := json.Marshal(entry)
 	slog.Info(fmt.Sprintf("AUDIT:%s", string(data)))
+}
+
+func auditLog(decision string, action PolicyAction, result PolicyResult) {
+	AuditLog(AuditEntry{
+		Decision:   decision,
+		Action:     action.Action,
+		TargetNode: action.TargetNode,
+		TargetIP:   action.TargetIP,
+		Reasons:    result.Reasons,
+		MatchedBy:  result.MatchedBy,
+	})
 }

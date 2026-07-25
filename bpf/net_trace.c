@@ -48,8 +48,16 @@ struct {
     __type(value, __u64); // last emission ns
 } rate_limit SEC(".maps");
 
-// 采样间隔（纳秒），通过 map 值在用户态配置，默认 100ms
-const __u64 sampling_interval_ns = 100000000;
+// 采样配置 map（用户态可写，key=0 → value=采样间隔纳秒）
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(max_entries, 1);
+    __type(key, __u32);
+    __type(value, __u64);
+} sampling_config SEC(".maps");
+
+// 默认采样间隔 100ms
+const __u64 default_sampling_interval_ns = 100000000;
 
 static __u64 make_flow_key(__u32 saddr, __u32 daddr, __u16 sport, __u16 dport) {
     return (__u64)saddr ^ (__u64)daddr ^ ((__u64)sport << 16) ^ (__u64)dport;
@@ -59,12 +67,15 @@ static int should_sample(__u32 saddr, __u32 daddr, __u16 sport, __u16 dport) {
     __u64 key = make_flow_key(saddr, daddr, sport, dport);
     __u64 *last = bpf_map_lookup_elem(&rate_limit, &key);
     __u64 now = bpf_ktime_get_ns();
-    if (last && (now - *last) < sampling_interval_ns) {
-        return 0; // 采样：跳过
+    __u32 cfg_key = 0;
+    __u64 *interval_ptr = bpf_map_lookup_elem(&sampling_config, &cfg_key);
+    __u64 interval_ns = interval_ptr ? *interval_ptr : default_sampling_interval_ns;
+    if (last && (now - *last) < interval_ns) {
+        return 0;
     }
     __u64 val = now;
     bpf_map_update_elem(&rate_limit, &key, &val, BPF_ANY);
-    return 1; // 通过
+    return 1;
 }
 
 // ---------- kprobe ----------

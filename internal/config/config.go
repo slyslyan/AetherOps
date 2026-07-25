@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	apperrors "ebpf-autoheal/internal/errors"
@@ -38,6 +39,11 @@ type Config struct {
 	HTTPProbeTarget string // uprobe 目标二进制路径（默认 "/proc/self/exe"）
 	TCDropTTL       int    // TC drop 规则 TTL（分钟，默认 5）
 
+	// ===== 自适应采样 =====
+	AdaptiveSamplingThreshold  float64 // 触发高频采样的异常分数阈值（默认 5.0）
+	NormalSamplingIntervalNs   uint64  // 正常采样间隔纳秒（默认 100ms）
+	AdaptiveSamplingIntervalNs uint64  // 异常模式采样间隔纳秒（默认 10ms）
+
 	// ===== 安全开关 =====
 	DryRun bool // 影子模式：诊断 + 决策全流程但不实际执行自愈（默认 false）
 
@@ -68,8 +74,11 @@ func LoadFromEnv() *Config {
 		MetricsAddr:           metricsAddr,
 		MCPAddr:               envStr("CFG_MCP_ADDR", ":50052"),
 		HTTPProbeTarget:       envStr("CFG_HTTP_PROBE_TARGET", "/proc/self/exe"),
-		TCDropTTL:             envInt("CFG_TC_DROP_TTL", 5),
-		DryRun:                envBool("DRY_RUN", false),
+		TCDropTTL:                  envInt("CFG_TC_DROP_TTL", 5),
+		AdaptiveSamplingThreshold:  envFloat("CFG_ADAPTIVE_SAMPLING_THRESHOLD", 5.0),
+		NormalSamplingIntervalNs:   uint64(envInt("CFG_NORMAL_SAMPLING_NS", 100000000)),
+		AdaptiveSamplingIntervalNs: uint64(envInt("CFG_ADAPTIVE_SAMPLING_NS", 10000000)),
+		DryRun:                     envBool("DRY_RUN", false),
 	}
 }
 
@@ -162,6 +171,7 @@ func envBool(key string, def bool) bool {
 
 // Cooldown 管理自愈冷却期，防止同一节点被频繁自愈。
 type Cooldown struct {
+	mu      sync.Mutex
 	entries map[string]time.Time
 	ttl     time.Duration
 }
@@ -176,6 +186,8 @@ func NewCooldown(ttl time.Duration) *Cooldown {
 
 // IsOnCooldown 检查节点是否在冷却期内。
 func (c *Cooldown) IsOnCooldown(nodeID string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.ttl <= 0 {
 		return false
 	}
@@ -192,6 +204,8 @@ func (c *Cooldown) IsOnCooldown(nodeID string) bool {
 
 // Set 设置节点的冷却期。
 func (c *Cooldown) Set(nodeID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.ttl <= 0 {
 		return
 	}
@@ -200,6 +214,8 @@ func (c *Cooldown) Set(nodeID string) {
 
 // Expire 清理过期冷却记录。
 func (c *Cooldown) Expire() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	now := time.Now()
 	for id, expiry := range c.entries {
 		if now.After(expiry) {

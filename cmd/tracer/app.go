@@ -57,9 +57,23 @@ type App struct {
 	tcDropTTL     time.Duration
 
 	// HTTP uprobe
-	httpProbeObjs  http_probeObjects
-	httpProbeLinks []link.Link
-	httpEventsRd   *ringbuf.Reader
+	httpProbeObjs   http_probeObjects
+	httpProbeLinks  []link.Link
+	httpEventsRd    *ringbuf.Reader
+	httpProbeActive bool
+	httpProbeMu     sync.Mutex
+
+	// Redis protocol trace
+	redisObjs redis_traceObjects
+	redisRd   *ringbuf.Reader
+
+	// Protocol classifier
+	protoClsObjs proto_classifierObjects
+	protoClsRd   *ringbuf.Reader
+
+	// Trace context extraction
+	traceCtxObjs trace_contextObjects
+	traceCtxRd   *ringbuf.Reader
 
 	// TCP RTT（请求级往返延迟）
 	rttObjs   tcp_rttObjects
@@ -155,7 +169,7 @@ func (a *App) Start(ctx context.Context) error {
 	if err := a.initHTTPProbe(a.cfg.HTTPProbeTarget); err != nil {
 		slog.Info(fmt.Sprintf("HTTP probe init failed: %v", err))
 	}
-	go a.consumeHTTPEvents()
+	go a.consumeHTTPEvents(ctx)
 
 	// ===== tcp_conntrack =====
 	connObjs := tcp_conntrackObjects{}
@@ -241,6 +255,82 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	}
 
+	// ===== Redis 协议解析 =====
+	redisObjs := redis_traceObjects{}
+	if err := loadRedis_traceObjects(&redisObjs, nil); err != nil {
+		slog.Info(fmt.Sprintf("redis_trace load failed (Redis protocol parsing unavailable): %v", err))
+	} else {
+		a.redisObjs = redisObjs
+		kpRedis, err := link.Kprobe("tcp_sendmsg", redisObjs.KprobeRedisSendmsg, nil)
+		if err != nil {
+			slog.Info(fmt.Sprintf("redis_trace kprobe attach failed: %v", err))
+			a.redisObjs.Close()
+		} else {
+			redisRd, err := ringbuf.NewReader(redisObjs.RedisEvents)
+			if err != nil {
+				slog.Info(fmt.Sprintf("redis_trace ringbuf create failed: %v", err))
+				kpRedis.Close()
+				a.redisObjs.Close()
+			} else {
+				a.redisRd = redisRd
+				go a.consumeRedisEvents(ctx)
+				slog.Info("redis_trace probe loaded — Redis RESP command parsing active")
+				// 设置默认 Redis 端口
+				portKey := uint32(0)
+				defaultPort := uint16(6379)
+				_ = redisObjs.RedisPorts.Put(&portKey, &defaultPort)
+			}
+		}
+	}
+
+	// ===== 协议分类器 =====
+	pcObjs := proto_classifierObjects{}
+	if err := loadProto_classifierObjects(&pcObjs, nil); err != nil {
+		slog.Info(fmt.Sprintf("proto_classifier load failed: %v", err))
+	} else {
+		a.protoClsObjs = pcObjs
+		kpPC, err := link.Kprobe("tcp_sendmsg", pcObjs.KprobeProtoClassify, nil)
+		if err != nil {
+			slog.Info(fmt.Sprintf("proto_classifier kprobe attach failed: %v", err))
+			a.protoClsObjs.Close()
+		} else {
+			pcRd, err := ringbuf.NewReader(pcObjs.ProtoEvents)
+			if err != nil {
+				slog.Info(fmt.Sprintf("proto_classifier ringbuf create failed: %v", err))
+				kpPC.Close()
+				a.protoClsObjs.Close()
+			} else {
+				a.protoClsRd = pcRd
+				go a.consumeProtoEvents(ctx)
+				slog.Info("proto_classifier probe loaded")
+			}
+		}
+	}
+
+	// ===== Trace 上下文提取 =====
+	tcObjs := trace_contextObjects{}
+	if err := loadTrace_contextObjects(&tcObjs, nil); err != nil {
+		slog.Info(fmt.Sprintf("trace_context load failed: %v", err))
+	} else {
+		a.traceCtxObjs = tcObjs
+		kpTC, err := link.Kprobe("tcp_sendmsg", tcObjs.KprobeTraceContext, nil)
+		if err != nil {
+			slog.Info(fmt.Sprintf("trace_context kprobe attach failed: %v", err))
+			a.traceCtxObjs.Close()
+		} else {
+			tcRd, err := ringbuf.NewReader(tcObjs.TraceContextEvents)
+			if err != nil {
+				slog.Info(fmt.Sprintf("trace_context ringbuf create failed: %v", err))
+				kpTC.Close()
+				a.traceCtxObjs.Close()
+			} else {
+				a.traceCtxRd = tcRd
+				go a.consumeTraceEvents(ctx)
+				slog.Info("trace_context probe loaded — distributed tracing context extraction active")
+			}
+		}
+	}
+
 	// ===== HTTP 服务（Prometheus + 健康检查） =====
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.Handler())
@@ -263,6 +353,9 @@ func (a *App) Start(ctx context.Context) error {
 	if err := a.mcpSrv.Start(); err != nil {
 		slog.Info(fmt.Sprintf("MCP server start failed: %v", err))
 	}
+
+	// 启动自健康检查
+	go a.runHealthCheck(ctx)
 
 	slog.Info("eBPF-AutoHeal started!")
 	slog.Info(fmt.Sprintf("   topology interval: %ds  |  analysis interval: %ds", a.cfg.TopologyPrintInterval, a.cfg.AnalysisInterval))
@@ -313,6 +406,26 @@ func (a *App) Shutdown(ctx context.Context) {
 	if a.connObjs.KprobeTcpConnect != nil {
 		a.connObjs.Close()
 	}
+	if a.redisRd != nil {
+		a.redisRd.Close()
+	}
+	if a.protoClsRd != nil {
+		a.protoClsRd.Close()
+	}
+	if a.protoClsObjs.KprobeProtoClassify != nil {
+		a.protoClsObjs.Close()
+	}
+	if a.traceCtxRd != nil {
+		a.traceCtxRd.Close()
+	}
+	if a.traceCtxObjs.KprobeTraceContext != nil {
+		a.traceCtxObjs.Close()
+	}
+	if a.redisObjs.KprobeRedisSendmsg != nil {
+		if a.redisObjs.KprobeRedisSendmsg != nil {
+			a.redisObjs.Close()
+		}
+	}
 	a.removeAllTCRules()
 	a.closeTCDrop()
 	a.closeHTTPProbe()
@@ -324,6 +437,30 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.httpSrv.Shutdown(ctx)
 	}
 	slog.Info("shutdown complete")
+}
+
+// adjustSamplingOnAnomaly 根据异常检测结果动态调整 eBPF 采样率。
+func (a *App) adjustSamplingOnAnomaly(suspects []graph.Suspicion) {
+	normalInterval := uint64(a.cfg.NormalSamplingIntervalNs)
+	adaptiveInterval := uint64(a.cfg.AdaptiveSamplingIntervalNs)
+
+	hasAnomaly := len(suspects) > 0 && suspects[0].Score > a.cfg.AdaptiveSamplingThreshold
+	targetInterval := normalInterval
+	if hasAnomaly {
+		targetInterval = adaptiveInterval
+	}
+
+	key := uint32(0)
+
+	// 更新主 tracer 采样率
+	if a.tracerObjs.tracerMaps.SamplingConfig != nil {
+		_ = a.tracerObjs.tracerMaps.SamplingConfig.Put(&key, &targetInterval)
+	}
+
+	// 更新 RTT 采样率
+	if a.rttObjs.tcp_rttMaps.RttSamplingConfig != nil {
+		_ = a.rttObjs.tcp_rttMaps.RttSamplingConfig.Put(&key, &targetInterval)
+	}
 }
 
 // uint32ToIP 将小端序 uint32 转换为 net.IP。

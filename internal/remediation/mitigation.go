@@ -39,17 +39,27 @@ type PolicyChecker interface {
 }
 
 type Service struct {
-	cfg        *config.Config
-	policy     PolicyChecker
-	protected  map[string]bool
-	httpClient *http.Client
-	outputDir  string
-	cooldown   *config.Cooldown
+	cfg            *config.Config
+	policy         PolicyChecker
+	protected      map[string]bool
+	httpClient     *http.Client
+	outputDir      string
+	cooldown       *config.Cooldown
+	lockoutTracker *LockoutTracker
+	canaryExecutor *CanaryExecutor
 }
+
+// allowAllPolicy 在策略检查器为 nil 时作为默认值，允许所有自愈操作。
+type allowAllPolicy struct{}
+
+func (a *allowAllPolicy) CheckBeforeMitigation(suspect graph.Suspicion) bool { return true }
 
 func NewService(cfg *config.Config, pc PolicyChecker) *Service {
 	if cfg == nil {
 		cfg = &config.Config{MitigationCooldownSec: 120}
+	}
+	if pc == nil {
+		pc = &allowAllPolicy{}
 	}
 	outputDir := os.Getenv("AETHEROPS_OUTPUT_DIR")
 	if outputDir == "" {
@@ -65,9 +75,11 @@ func NewService(cfg *config.Config, pc PolicyChecker) *Service {
 			"127.0.0.1": true,
 			"::1":       true,
 		},
-		httpClient: &http.Client{Timeout: 10 * time.Second},
-		outputDir:  outputDir,
-		cooldown:   config.NewCooldown(time.Duration(cfg.MitigationCooldownSec) * time.Second),
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		outputDir:      outputDir,
+		cooldown:       config.NewCooldown(time.Duration(cfg.MitigationCooldownSec) * time.Second),
+		lockoutTracker: NewLockoutTracker(DefaultLockoutConfig()),
+		canaryExecutor: NewCanaryExecutor(DefaultCanaryConfig()),
 	}
 }
 
@@ -75,7 +87,7 @@ func (s *Service) outputFile(pattern string) (*os.File, error) {
 	return os.CreateTemp(s.outputDir, pattern)
 }
 
-func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecutor, k8s K8sClient) {
+func (s *Service) PerformMitigation(suspects []graph.Suspicion, g *graph.ServiceGraph, tcDrop TCExecutor, k8s K8sClient) {
 	if len(suspects) == 0 {
 		return
 	}
@@ -107,6 +119,24 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, tcDrop TCExecuto
 				i+1, suspect.Node))
 			continue
 		}
+
+			// 频繁自愈锁定检查
+			if locked, reason := s.lockoutTracker.Record(suspect.Node, ActionTCPDrop); locked {
+				slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s LOCKED -- %s", i+1, suspect.Node, reason))
+				continue
+			}
+
+			// 爆炸半径门控
+			if g != nil {
+				gate := GateByBlastRadius(g, suspect.Node)
+				if !gate.Allowed {
+					slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s blocked by blast radius -- %s", i+1, suspect.Node, gate.Reason))
+					continue
+				}
+				if gate.EscalateHuman {
+					slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s requires human review -- %s", i+1, suspect.Node, gate.Reason))
+				}
+			}
 
 		slog.Info(fmt.Sprintf("mitigation triggered: suspect #%d %s (score %.2f)", i+1, suspect.Node, suspect.Score))
 

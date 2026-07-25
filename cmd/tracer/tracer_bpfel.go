@@ -72,16 +72,17 @@ type tracerProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tracerMapSpecs struct {
-	EntryStore *ebpf.MapSpec `ebpf:"entry_store"`
-	Events     *ebpf.MapSpec `ebpf:"events"`
-	RateLimit  *ebpf.MapSpec `ebpf:"rate_limit"`
+	EntryStore     *ebpf.MapSpec `ebpf:"entry_store"`
+	Events         *ebpf.MapSpec `ebpf:"events"`
+	RateLimit      *ebpf.MapSpec `ebpf:"rate_limit"`
+	SamplingConfig *ebpf.MapSpec `ebpf:"sampling_config"`
 }
 
 // tracerVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tracerVariableSpecs struct {
-	SamplingIntervalNs *ebpf.VariableSpec `ebpf:"sampling_interval_ns"`
+	DefaultSamplingIntervalNs *ebpf.VariableSpec `ebpf:"default_sampling_interval_ns"`
 }
 
 // tracerObjects contains all objects after they have been loaded into the kernel.
@@ -104,9 +105,10 @@ func (o *tracerObjects) Close() error {
 //
 // It can be passed to loadTracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tracerMaps struct {
-	EntryStore *ebpf.Map `ebpf:"entry_store"`
-	Events     *ebpf.Map `ebpf:"events"`
-	RateLimit  *ebpf.Map `ebpf:"rate_limit"`
+	EntryStore     *ebpf.Map `ebpf:"entry_store"`
+	Events         *ebpf.Map `ebpf:"events"`
+	RateLimit      *ebpf.Map `ebpf:"rate_limit"`
+	SamplingConfig *ebpf.Map `ebpf:"sampling_config"`
 }
 
 func (m *tracerMaps) Close() error {
@@ -114,6 +116,7 @@ func (m *tracerMaps) Close() error {
 		m.EntryStore,
 		m.Events,
 		m.RateLimit,
+		m.SamplingConfig,
 	)
 }
 
@@ -121,7 +124,7 @@ func (m *tracerMaps) Close() error {
 //
 // It can be passed to loadTracerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tracerVariables struct {
-	SamplingIntervalNs *ebpf.Variable `ebpf:"sampling_interval_ns"`
+	DefaultSamplingIntervalNs *ebpf.Variable `ebpf:"default_sampling_interval_ns"`
 }
 
 // tracerPrograms contains all programs after they have been loaded into the kernel.
