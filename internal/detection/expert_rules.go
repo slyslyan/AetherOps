@@ -18,8 +18,8 @@ type ExpertMatch struct {
 
 // rule 定义一条专家规则。
 type rule struct {
-	name      string
-	match     func(g *graph.ServiceGraph) []ExpertMatch
+	name     string
+	match    func(g *graph.ServiceGraph) []ExpertMatch
 	severity float64
 	action   string
 }
@@ -236,5 +236,3 @@ func matchRetryStorm(g *graph.ServiceGraph) []ExpertMatch {
 	}
 	return matches
 }
-
-

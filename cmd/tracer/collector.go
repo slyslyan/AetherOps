@@ -15,7 +15,6 @@ import (
 	"ebpf-autoheal/internal/metrics"
 )
 
-
 // consumeConnEvents 读取 tcp_conntrack 的连接事件 Ring Buffer。
 func (a *App) consumeConnEvents(ctx context.Context) {
 	if a.connRd == nil {

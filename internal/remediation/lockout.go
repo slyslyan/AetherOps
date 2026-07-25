@@ -32,10 +32,10 @@ func DefaultLockoutConfig() LockoutConfig {
 // LockoutTracker 滑动窗口计数器，防止频繁自愈。
 // 在窗口内同一服务触发次数超过阈值后，锁定自动操作并强制人工介入。
 type LockoutTracker struct {
-	mu       sync.Mutex
-	config   LockoutConfig
-	entries  map[string][]LockoutEntry
-	locked   map[string]time.Time // node -> lockout expiry
+	mu      sync.Mutex
+	config  LockoutConfig
+	entries map[string][]LockoutEntry
+	locked  map[string]time.Time // node -> lockout expiry
 }
 
 // NewLockoutTracker 创建锁定追踪器。

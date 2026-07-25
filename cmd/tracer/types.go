@@ -31,11 +31,11 @@ type connEventRaw struct {
 
 // redisEventRaw 对应 eBPF redis_trace.c 中的 redis_event 结构体（40 字节）。
 type redisEventRaw struct {
-	Pid        uint32    // 进程 ID
-	DataLen    uint32    // payload 大小
+	Pid         uint32   // 进程 ID
+	DataLen     uint32   // payload 大小
 	TimestampNs uint64   // 时间戳（纳秒）
-	Command    [16]byte  // RESP 命令名（GET/SET/MGET...）
-	Pad        [4]byte   // 填充，Pad[0]=命令ID
+	Command     [16]byte // RESP 命令名（GET/SET/MGET...）
+	Pad         [4]byte  // 填充，Pad[0]=命令ID
 }
 
 // protoEventRaw 对应 eBPF proto_classifier.c 中的 proto_event 结构体（32 字节）。

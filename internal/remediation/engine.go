@@ -466,18 +466,18 @@ func (pe *Engine) CheckBeforeMitigation(suspect graph.Suspicion) bool {
 
 // AuditEntry 结构化审计日志条目。
 type AuditEntry struct {
-	Type        string              `json:"type"`
-	Timestamp   string              `json:"timestamp"`
-	Decision    string              `json:"decision"`
+	Type        string                `json:"type"`
+	Timestamp   string                `json:"timestamp"`
+	Decision    string                `json:"decision"`
 	Action      RemediationActionType `json:"action"`
-	TargetNode  string              `json:"target_node"`
-	TargetIP    string              `json:"target_ip,omitempty"`
-	Reasons     []string            `json:"reasons"`
-	MatchedBy   []string            `json:"matched_by"`
-	MttrSec     float64             `json:"mttr_sec,omitempty"`
-	CanaryPhase string              `json:"canary_phase,omitempty"`
-	BlastRadius int                 `json:"blast_radius,omitempty"`
-	LockedBy    string              `json:"locked_by,omitempty"`
+	TargetNode  string                `json:"target_node"`
+	TargetIP    string                `json:"target_ip,omitempty"`
+	Reasons     []string              `json:"reasons"`
+	MatchedBy   []string              `json:"matched_by"`
+	MttrSec     float64               `json:"mttr_sec,omitempty"`
+	CanaryPhase string                `json:"canary_phase,omitempty"`
+	BlastRadius int                   `json:"blast_radius,omitempty"`
+	LockedBy    string                `json:"locked_by,omitempty"`
 }
 
 // AuditLog 记录结构化审计条目。

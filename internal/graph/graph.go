@@ -65,8 +65,8 @@ type ServiceEdge struct {
 
 // TraceContext 分布式追踪上下文。
 type TraceContext struct {
-	TraceID    string
-	SpanID     string
+	TraceID     string
+	SpanID      string
 	TraceSource string // "w3c", "jaeger", "datadog", "generic"
 }
 

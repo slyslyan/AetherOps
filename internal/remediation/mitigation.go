@@ -120,23 +120,23 @@ func (s *Service) PerformMitigation(suspects []graph.Suspicion, g *graph.Service
 			continue
 		}
 
-			// 频繁自愈锁定检查
-			if locked, reason := s.lockoutTracker.Record(suspect.Node, ActionTCPDrop); locked {
-				slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s LOCKED -- %s", i+1, suspect.Node, reason))
+		// 频繁自愈锁定检查
+		if locked, reason := s.lockoutTracker.Record(suspect.Node, ActionTCPDrop); locked {
+			slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s LOCKED -- %s", i+1, suspect.Node, reason))
+			continue
+		}
+
+		// 爆炸半径门控
+		if g != nil {
+			gate := GateByBlastRadius(g, suspect.Node)
+			if !gate.Allowed {
+				slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s blocked by blast radius -- %s", i+1, suspect.Node, gate.Reason))
 				continue
 			}
-
-			// 爆炸半径门控
-			if g != nil {
-				gate := GateByBlastRadius(g, suspect.Node)
-				if !gate.Allowed {
-					slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s blocked by blast radius -- %s", i+1, suspect.Node, gate.Reason))
-					continue
-				}
-				if gate.EscalateHuman {
-					slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s requires human review -- %s", i+1, suspect.Node, gate.Reason))
-				}
+			if gate.EscalateHuman {
+				slog.Warn(fmt.Sprintf("mitigation: suspect #%d %s requires human review -- %s", i+1, suspect.Node, gate.Reason))
 			}
+		}
 
 		slog.Info(fmt.Sprintf("mitigation triggered: suspect #%d %s (score %.2f)", i+1, suspect.Node, suspect.Score))
 

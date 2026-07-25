@@ -60,10 +60,10 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 			select {
 			case <-analysisTick.C:
 				suspects := detection.AnalyzeRootCause(a.graph, a.cfg)
-					expertMatches := detection.MatchExpertRules(a.graph)
-					for _, m := range expertMatches {
-						slog.Info(fmt.Sprintf("Expert rule: %s (%.2f) — %s: %s", m.RuleName, m.Severity, m.Node, m.Reason))
-					}
+				expertMatches := detection.MatchExpertRules(a.graph)
+				for _, m := range expertMatches {
+					slog.Info(fmt.Sprintf("Expert rule: %s (%.2f) — %s: %s", m.RuleName, m.Severity, m.Node, m.Reason))
+				}
 				a.adjustSamplingOnAnomaly(suspects)
 				if len(suspects) > 0 {
 					slog.Info("Root cause analysis: high-latency suspects")

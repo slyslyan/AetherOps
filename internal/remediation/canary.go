@@ -11,10 +11,10 @@ import (
 type CanaryPhase int
 
 const (
-	CanaryPhasePending    CanaryPhase = iota // 等待执行
-	CanaryPhaseObserving                     // 观察中
-	CanaryPhaseRollout                       // 全量推广
-	CanaryPhaseRollback                      // 回滚中
+	CanaryPhasePending   CanaryPhase = iota // 等待执行
+	CanaryPhaseObserving                    // 观察中
+	CanaryPhaseRollout                      // 全量推广
+	CanaryPhaseRollback                     // 回滚中
 )
 
 // CanaryResult 金丝雀执行结果。
@@ -47,10 +47,10 @@ func DefaultCanaryConfig() CanaryConfig {
 
 // CanaryExecutor 管理金丝雀自愈的两阶段执行。
 type CanaryExecutor struct {
-	mu       sync.Mutex
-	config   CanaryConfig
-	history  map[string][]CanaryResult
-	active   map[string]*CanaryResult
+	mu      sync.Mutex
+	config  CanaryConfig
+	history map[string][]CanaryResult
+	active  map[string]*CanaryResult
 }
 
 // NewCanaryExecutor 创建金丝雀执行器。
