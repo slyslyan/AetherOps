@@ -42,6 +42,8 @@ struct netEventRaw {
 
 **测量原理**：`tcp_sendmsg` 入口记录时间戳 → 出口计算 delta = 内核缓冲拷贝时间。约 µs 级。
 
+**重要限制**：`tcp_sendmsg` 测量的是内核缓冲拷贝（~µs），**不受 tc netem 等网络级延迟影响**。网络故障检测必须依赖 `tcp_conntrack`（连接级 RTT）或 `tcp_rtt`（请求级 RTT）作为延迟数据源。Go 侧异常检测已实现双源切换：`latRatio = max(sendmsgLatRatio, rttLatRatio)`。
+
 **数据通路**：
 ```
 tcp_sendmsg 入口 → bpf_map (PID→时间戳)
@@ -76,7 +78,9 @@ struct connEventRaw {
 
 **测量原理**：`tcp_connect` 记录连接建立时间 → `tcp_close` 计算连接持续时长。
 
-**适用范围**：短连接（HTTP/1.0, DNS）。长连接（MySQL 连接池）的 duration 会被过滤（> 30s 丢弃）。
+**适用范围**：短连接（HTTP/1.0, DNS）的网络级 RTT 检测。长连接（MySQL 连接池）的 duration 会被过滤（> 30s 丢弃）。
+
+**在混沌工程中的关键作用**：`tcp_conntrack` 连接时长包含网络传输延迟（~ms），而 `tcp_sendmsg` 仅测内核缓冲拷贝（~µs）。tc netem 200ms 注入后，`tcp_conntrack` 驱动的 `rttLatRatio` 能正确触发异常检测（anomaly_score 0→15.68）。
 
 ---
 
