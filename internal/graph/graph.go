@@ -53,13 +53,13 @@ type ServiceEdge struct {
 	// Kept independent from the main (tcp_sendmsg kernel buffer) stats so that
 	// anomaly detection can use real network RTT without dilution from μs-level
 	// kernel buffer copy measurements.
-	RttCount        int64
-	RttTotalLat     float64
-	RttAvgLat       float64
-	RttWindow       []float64
-	RttWindowSize   int
-	RttP95          float64
-	RttBaselineP95  float64
+	RttCount       int64
+	RttTotalLat    float64
+	RttAvgLat      float64
+	RttWindow      []float64
+	RttWindowSize  int
+	RttP95         float64
+	RttBaselineP95 float64
 
 	LastCount   int64
 	CallEma     float64
@@ -190,9 +190,9 @@ func (g *ServiceGraph) AddRttCall(src, dst string, rttMs float64, isError bool) 
 	e, ok := g.Edges[key]
 	if !ok {
 		e = &ServiceEdge{
-			Src:          src,
-			Dst:          dst,
-			WindowSize:   30,
+			Src:           src,
+			Dst:           dst,
+			WindowSize:    30,
 			RttWindowSize: 30,
 		}
 		g.Edges[key] = e
