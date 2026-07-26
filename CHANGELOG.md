@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0] — 2026-07-26
+
+### 新增
+- **RTT 双源异常检测**：`latRatio = max(sendmsgLatRatio, rttLatRatio)`，网络级故障由 `tcp_conntrack`/`tcp_rtt` 驱动检测
+- **ServiceEdge 独立 RTT 统计**：RttCount, RttAvgLat, RttP95, RttBaselineP95，与 sendmsg 统计分离
+- **latency_source 标签**：`ebpf_edge_latency_ms` 直方图新增 `tcp_sendmsg`/`tcp_rtt`/`tcp_conntrack` 标签
+- **混沌工程自动化框架**：`chaos/` 目录，含 4 个实验、主编排器、断言库、安全护栏、JSON/Markdown 报告
+
+### 修复
+- **anomaly_score 始终为 0**：根因是 `tcp_sendmsg` 测量内核缓冲拷贝（~µs），不受 tc netem 影响。将 `tcp_conntrack` RTT 数据独立统计后立即生效
+
+### 验证
+- 混沌实验 01（tc netem 200ms）：anomaly_score 0→15.68（11 条边触发），latency_increased 10/75 条边
+
 ## [1.0.0] — 2026-07-25
 
 ### 新增
@@ -18,7 +32,7 @@
 - **MCP 服务**：5 个工具 (get_topology, evaluate_remediation, execute_remediation, check_policy, list_policies) + 3 个资源 (topology://current, topology://anomalies, policy://rules)
 - **K8s 部署**：DaemonSet + Helm Chart + 安装脚本
 - **非 K8s 部署**：systemd 服务 + install.sh
-- **混沌工程实验**：7 个实验设计 + 执行脚本 (run-chaos.sh)
+- **混沌工程框架**：4 个自动化实验 + 主编排器 + 断言库 + 安全护栏 + JSON/Markdown 报告
 - **完整文档**：README, 架构, eBPF 探针, 配置, 部署, MCP API, 开发指南
 
 ### 技术栈

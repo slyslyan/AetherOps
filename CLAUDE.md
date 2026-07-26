@@ -23,9 +23,9 @@ Python 认知面: MCP Client → Supervisor → 5 Expert Agents → LLM Diagnosi
 cmd/tracer/          应用入口（app.go, loop.go, collector.go）
 internal/
   config/            配置加载（env → Config struct）
-  detection/         根因分析（异常分数 + 反向随机游走 + 故障聚类）
+  detection/         根因分析（latRatio = max(sendmsgLatRatio, rttLatRatio) + 反向随机游走 + 故障聚类）
   errors/            错误哨兵（ErrEBPFLoad, ErrKprobeAttach 等）
-  graph/             服务拓扑图（ServiceGraph + ServiceEdge + Suspicion）
+  graph/             服务拓扑图（ServiceGraph + ServiceEdge，含独立 RTT 统计 RttP95/RttBaselineP95）
   mcp/               MCP JSON-RPC over HTTP SSE 服务
   metrics/           Prometheus 指标（agent_events, agent_errors）
   remediation/       自愈执行（mitigation）+ 策略引擎（policy）+ 爆炸半径评估（blastradius）
@@ -58,7 +58,7 @@ docker-compose.aetherops.yml  一键启动认知平面 + Prometheus + Grafana
 
 ## 已删除模块（面试不展开，不要重建）
 
-以下模块已在简化中删除：chaos/、benchmark/、causal_inference.py、multi_turn_diagnosis.py、metrics_fetcher.py、hooks.py、agent_observability.py、incident_memory.py
+以下模块已在简化中删除：benchmark/、causal_inference.py、multi_turn_diagnosis.py、metrics_fetcher.py、hooks.py、agent_observability.py、incident_memory.py
 
 ## 核心接口（必须保持兼容）
 
@@ -73,8 +73,8 @@ docker-compose.aetherops.yml  一键启动认知平面 + Prometheus + Grafana
 | 探针 | C 文件 | Hook 点 | 测量内容 | 适用场景 |
 |---|---|---|---|---|
 | tracer | `bpf/net_trace.c` | kprobe/kretprobe tcp_sendmsg | 内核缓冲拷贝时间（~µs） | 通用流量拓扑发现 |
-| tcp_conntrack | `bpf/tcp_conntrack.c` | kprobe tcp_connect + tcp_close | 连接生命周期 RTT | 短连接（HTTP/1.0, DNS） |
-| tcp_rtt | `bpf/tcp_rtt.c` | kprobe tcp_sendmsg + kretprobe tcp_recvmsg | 请求级往返延迟 | **长连接池**（MySQL, Redis, PgSQL） |
+| tcp_conntrack | `bpf/tcp_conntrack.c` | kprobe tcp_connect + tcp_close | 连接生命周期 RTT（~ms） | 短连接 RTT 检测，tc netem 等网络级故障 |
+| tcp_rtt | `bpf/tcp_rtt.c` | kprobe tcp_sendmsg + kretprobe tcp_recvmsg | 请求级往返延迟（~ms） | **长连接池**（MySQL, Redis, PgSQL）请求级 RTT |
 | tc_drop | `bpf/tc_drop.c` | TC clsact | 丢包 | 自愈熔断 |
 | http_probe | `bpf/http_probe.c` | uprobe HTTP handler | HTTP 请求耗时 | HTTP 服务细分 |
 
@@ -82,12 +82,14 @@ docker-compose.aetherops.yml  一键启动认知平面 + Prometheus + Grafana
 - `tcp_rtt.c` 用 `sk_ptr`（socket 指针）做 key，正确配对同一 socket 的 send/recv
 - `tcp_rtt.c` 和 `tcp_conntrack.c` 各有独立 ringbuf，互不干扰
 - RTT > 30s 的事件被丢弃（空闲 keep-alive 非真实请求）
+- `tcp_sendmsg` 测量的是内核缓冲拷贝时间（~µs），**不受网络延迟影响**；网络级故障检测依赖 `tcp_conntrack`（连接级）和 `tcp_rtt`（请求级）作为 RTT 数据源
 
 ## 异常检测阈值
 
 - `ServiceEdge.BaselineP95`：EMA 平滑的稳定基线，仅在非异常窗口更新
+- `RttBaselineP95`：独立 RTT 基线，与 sendmsg BaselineP95 分离统计，不受 µs 级样本稀释
 - gating 逻辑：`windowP95 < BaselineP95 * 2.0` 时才纳入基线（防止双峰分布抬高阈值）
-- 分析时用 `BaselineP95 * P95Multiplier` 而非原始 `P95` 计算阈值
+- `latRatio = max(sendmsgLatRatio, rttLatRatio)` — RTT 信号强于 sendmsg 时自动切换数据源
 
 ## 自愈策略链
 
