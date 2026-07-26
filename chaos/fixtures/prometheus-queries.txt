@@ -1,0 +1,32 @@
+# eBPF agent Prometheus 查询模板
+# 用法: grep 的 regex 模式直接匹配 curl localhost:2112/metrics 输出
+
+# ---- 异常检测 ----
+# 所有异常分数 > 0 的边
+QUERY_ANOMALY_ACTIVE="ebpf_edge_anomaly_score{[^}]*} [^0]"
+
+# 最大异常分数的边
+QUERY_ANOMALY_TOP="ebpf_edge_anomaly_score"
+
+# ---- 根因分析 ----
+# 根因嫌疑节点
+QUERY_ROOT_CAUSE="ebpf_root_cause_score"
+
+# ---- HTTP 探针 ----
+# HTTP 状态码分布
+QUERY_HTTP_STATUS="ebpf_http_requests_total"
+# HTTP 延迟
+QUERY_HTTP_LATENCY="ebpf_http_request_duration_ms"
+
+# ---- Redis 探针 ----
+# Redis 命令计数
+QUERY_REDIS_COMMANDS="ebpf_redis_commands_total"
+
+# ---- 自愈 ----
+# 自愈动作计数
+QUERY_MITIGATION="ebpf_mitigation_total"
+
+# ---- Agent 健康 ----
+QUERY_AGENT_UP="ebpf_agent_up "
+QUERY_AGENT_EVENTS="ebpf_agent_events_total"
+QUERY_AGENT_ERRORS="ebpf_agent_errors_total"

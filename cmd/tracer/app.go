@@ -22,6 +22,7 @@ import (
 	apperrors "ebpf-autoheal/internal/errors"
 	"ebpf-autoheal/internal/graph"
 	mcppkg "ebpf-autoheal/internal/mcp"
+	"ebpf-autoheal/internal/metrics"
 	"ebpf-autoheal/internal/remediation"
 	"ebpf-autoheal/internal/resolver"
 )
@@ -460,6 +461,19 @@ func (a *App) adjustSamplingOnAnomaly(suspects []graph.Suspicion) {
 	// 更新 RTT 采样率
 	if a.rttObjs.tcp_rttMaps.RttSamplingConfig != nil {
 		_ = a.rttObjs.tcp_rttMaps.RttSamplingConfig.Put(&key, &targetInterval)
+	}
+}
+
+// reportMetricsToPrometheus 将图的当前状态同步到 Prometheus 指标。
+func (a *App) reportMetricsToPrometheus() {
+	a.graph.RLock()
+	defer a.graph.RUnlock()
+	for _, e := range a.graph.Edges {
+		metrics.AnomalyScore.WithLabelValues(e.Src, e.Dst).Set(e.AnomalyScore)
+		metrics.RootCauseScore.WithLabelValues(e.Dst).Set(e.AnomalyScore)
+	}
+	for _, n := range a.graph.Nodes {
+		metrics.NodeAvgLatency.WithLabelValues(n.ID).Set(n.AvgLat)
 	}
 }
 

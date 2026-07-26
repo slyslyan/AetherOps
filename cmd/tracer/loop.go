@@ -60,6 +60,8 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 			select {
 			case <-analysisTick.C:
 				suspects := detection.AnalyzeRootCause(a.graph, a.cfg)
+				// Report anomaly scores + node latency to Prometheus.
+				a.reportMetricsToPrometheus()
 				expertMatches := detection.MatchExpertRules(a.graph)
 				for _, m := range expertMatches {
 					slog.Info(fmt.Sprintf("Expert rule: %s (%.2f) — %s: %s", m.RuleName, m.Severity, m.Node, m.Reason))
@@ -144,6 +146,11 @@ func (a *App) RunMainLoop(ctx context.Context) error {
 		dstService := fmt.Sprintf("%s:%d", dstIP, raw.Dport)
 		isError := delayMs > 1000.0
 		a.graph.AddCall(srcService, dstService, delayMs, isError)
+		metrics.EdgeLatency.WithLabelValues(srcService, dstService, "tcp_sendmsg").Observe(delayMs)
+		metrics.EdgeCalls.WithLabelValues(srcService, dstService).Inc()
+		if isError {
+			metrics.EdgeErrors.WithLabelValues(srcService, dstService).Inc()
+		}
 		fmt.Printf("PID=%d (%s) %s:%d -> %s:%d delay=%.2f ms\n",
 			raw.Pid, comm, srcIP, raw.Sport, dstIP, raw.Dport, delayMs)
 	}

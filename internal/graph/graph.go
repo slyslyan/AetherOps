@@ -49,6 +49,18 @@ type ServiceEdge struct {
 	// (normal + anomalous) does not inflate the anomaly threshold.
 	BaselineP95 float64
 
+	// RTT-specific stats — end-to-end round-trip time (tcp_sendmsg → tcp_recvmsg).
+	// Kept independent from the main (tcp_sendmsg kernel buffer) stats so that
+	// anomaly detection can use real network RTT without dilution from μs-level
+	// kernel buffer copy measurements.
+	RttCount        int64
+	RttTotalLat     float64
+	RttAvgLat       float64
+	RttWindow       []float64
+	RttWindowSize   int
+	RttP95          float64
+	RttBaselineP95  float64
+
 	LastCount   int64
 	CallEma     float64
 	CallAnomaly float64
@@ -161,11 +173,51 @@ func (g *ServiceGraph) AddTraceContext(src, dst string, tc TraceContext) {
 	e.RecentTraces = append(e.RecentTraces, tc)
 }
 
-// AddCall 添加一次服务调用记录。
+// AddCall 添加一次服务调用记录（tcp_sendmsg 内核缓冲拷贝延迟）。
 func (g *ServiceGraph) AddCall(src, dst string, latencyMs float64, isError bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	g.addCallLocked(src, dst, latencyMs, isError)
+}
+
+// AddRttCall 添加一次 TCP RTT 调用记录（tcp_sendmsg → tcp_recvmsg 端到端往返延迟）。
+// RTT 统计独立于 tcp_sendmsg 内核缓冲拷贝延迟，不会被 μs 级测量稀释。
+func (g *ServiceGraph) AddRttCall(src, dst string, rttMs float64, isError bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	key := EdgeKey(src, dst)
+	e, ok := g.Edges[key]
+	if !ok {
+		e = &ServiceEdge{
+			Src:          src,
+			Dst:          dst,
+			WindowSize:   30,
+			RttWindowSize: 30,
+		}
+		g.Edges[key] = e
+		g.OutEdges[src] = append(g.OutEdges[src], e)
+		g.InEdges[dst] = append(g.InEdges[dst], e)
+	}
+
+	e.RttCount++
+	e.RttTotalLat += rttMs
+	if isError {
+		e.Errors++
+	}
+	e.RttAvgLat = e.RttTotalLat / float64(e.RttCount)
+
+	e.RttWindow = append(e.RttWindow, rttMs)
+	if len(e.RttWindow) > e.RttWindowSize {
+		e.RttWindow = e.RttWindow[1:]
+	}
+	e.RttP95 = Percentile(e.RttWindow, 95.0)
+
+	if e.RttBaselineP95 == 0 {
+		e.RttBaselineP95 = e.RttP95
+	} else if e.RttP95 < e.RttBaselineP95*BaselineGateMultiplier {
+		e.RttBaselineP95 = BaselineEmaAlpha*e.RttP95 + (1-BaselineEmaAlpha)*e.RttBaselineP95
+	}
 }
 
 // addCallLocked 假定调用者已持有 g.mu 写锁。
@@ -181,6 +233,7 @@ func (g *ServiceGraph) addCallLocked(src, dst string, latencyMs float64, isError
 			Dst:           dst,
 			WindowSize:    30,
 			LatencyWindow: make([]float64, 0, 30),
+			RttWindowSize: 30,
 		}
 		g.Edges[key] = e
 		g.OutEdges[src] = append(g.OutEdges[src], e)

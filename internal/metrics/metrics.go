@@ -10,10 +10,10 @@ var (
 	EdgeLatency = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Name:    "ebpf_edge_latency_ms",
-			Help:    "Latency of calls between services in ms",
+			Help:    "Latency of calls between services in ms. Label latency_source distinguishes tcp_sendmsg (kernel buffer copy), tcp_rtt (request-level round-trip), and tcp_conntrack (connection lifetime).",
 			Buckets: []float64{0.5, 1, 5, 10, 20, 50, 100, 200, 500, 1000, 2000},
 		},
-		[]string{"src", "dst"},
+		[]string{"src", "dst", "latency_source"},
 	)
 
 	EdgeCalls = prometheus.NewCounterVec(

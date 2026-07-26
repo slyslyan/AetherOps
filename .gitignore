@@ -65,6 +65,9 @@ interview-qa.md
 data/
 aetherops/data/
 
+# Chaos reports
+chaos/reports/
+
 # Build artifacts
 /tracer
 /ebpf-local

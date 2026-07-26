@@ -16,6 +16,7 @@ import (
 )
 
 // consumeConnEvents 读取 tcp_conntrack 的连接事件 Ring Buffer。
+// 短连接（<30s）的连接时长近似等于网络 RTT，使用 AddRttCall 写入独立 RTT 统计。
 func (a *App) consumeConnEvents(ctx context.Context) {
 	if a.connRd == nil {
 		return
@@ -52,14 +53,12 @@ func (a *App) consumeConnEvents(ctx context.Context) {
 		slog.Info(fmt.Sprintf("CONN %s %s:%d -> %s:%d duration=%.2f ms pid=%d (%s)",
 			role, srcIP, evt.Sport, dstIP, evt.Dport, durationMs, evt.Pid, comm))
 
-		// Feed short-lived connection RTT into the graph for anomaly detection.
-		// Filter out connections >30s (e.g. pooled DB connections) to avoid
-		// polluting the baseline with connection-lifetime durations.
 		if durationMs > 0 && durationMs < 30000 {
 			srcSvc := a.resolver.Resolve(evt.Pid, comm)
 			dstSvc := fmt.Sprintf("%s:%d", dstIP, evt.Dport)
 			isErr := durationMs > 1000.0
-			a.graph.AddCall(srcSvc, dstSvc, durationMs, isErr)
+			a.graph.AddRttCall(srcSvc, dstSvc, durationMs, isErr)
+			metrics.EdgeLatency.WithLabelValues(srcSvc, dstSvc, "tcp_conntrack").Observe(durationMs)
 		}
 	}
 }
@@ -100,7 +99,8 @@ func (a *App) consumeRTTEvents(ctx context.Context) {
 		srcSvc := a.resolver.Resolve(evt.Pid, comm)
 		dstSvc := fmt.Sprintf("%s:%d", dstIP, evt.Dport)
 		isErr := rttMs > 1000.0
-		a.graph.AddCall(srcSvc, dstSvc, rttMs, isErr)
+		a.graph.AddRttCall(srcSvc, dstSvc, rttMs, isErr)
+		metrics.EdgeLatency.WithLabelValues(srcSvc, dstSvc, "tcp_rtt").Observe(rttMs)
 	}
 }
 

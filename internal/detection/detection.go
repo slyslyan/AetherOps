@@ -19,7 +19,7 @@ func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspici
 
 	// 第 1 步：计算每条边的异常分数
 	for _, e := range g.Edges {
-		if e.Count < 2 {
+		if e.Count < 2 && e.RttCount < 2 {
 			e.AnomalyScore = 0
 			continue
 		}
@@ -37,6 +37,7 @@ func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspici
 			e.CallAnomaly = 1.0 + (e.CallEma-currentQPS)/e.CallEma
 		}
 
+		// Compute latRatio using tcp_sendmsg (kernel buffer copy) stats.
 		baseline := e.BaselineP95
 		if baseline == 0 {
 			baseline = e.P95
@@ -45,9 +46,33 @@ func AnalyzeRootCause(g *graph.ServiceGraph, cfg *config.Config) []graph.Suspici
 		if threshold < cfg.MinLatThresholdMs {
 			threshold = cfg.MinLatThresholdMs
 		}
-		latRatio := e.AvgLat / threshold
-		if latRatio < 1.0 {
-			latRatio = 0
+		sendmsgLatRatio := e.AvgLat / threshold
+		if sendmsgLatRatio < 1.0 {
+			sendmsgLatRatio = 0
+		}
+
+		// Compute latRatio using RTT (end-to-end round-trip) stats.
+		// RTT baseline reflects real network latency, not just kernel buffer copy.
+		rttLatRatio := 0.0
+		if e.RttCount >= 2 {
+			rttBaseline := e.RttBaselineP95
+			if rttBaseline == 0 {
+				rttBaseline = e.RttP95
+			}
+			rttThreshold := rttBaseline * cfg.P95Multiplier
+			if rttThreshold < cfg.MinLatThresholdMs {
+				rttThreshold = cfg.MinLatThresholdMs
+			}
+			rttLatRatio = e.RttAvgLat / rttThreshold
+			if rttLatRatio < 1.0 {
+				rttLatRatio = 0
+			}
+		}
+
+		// Use the stronger signal: max of sendmsg-based and RTT-based latRatio.
+		latRatio := sendmsgLatRatio
+		if rttLatRatio > latRatio {
+			latRatio = rttLatRatio
 		}
 
 		errorFactor := 1.0
