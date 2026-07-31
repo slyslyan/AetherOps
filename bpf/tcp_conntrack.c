@@ -1,140 +1,164 @@
-// bpf/tcp_conntrack.c — TCP 连接生命周期跟踪
-// 测量真实的连接建立→关闭耗时（RTT），替代 tcp_sendmsg 的缓冲拷贝时间
+// bpf/tcp_conntrack.c — TCP connection lifecycle tracking via tracepoint
+//
+// Reference: iovisor/bcc libbpf-tools/tcpstates (BSD-2 License)
+// Adapted from BCC tcpstates tracepoint pattern.
+//
+// Uses tracepoint/sock/inet_sock_set_state instead of kprobe, which:
+//   - Catches all TCP state transitions (connect, accept, close)
+//   - Provides sport/dport/family/saddr/daddr directly (no BPF_CORE_READ needed)
+//   - Works on kernels where kprobe is restricted
+
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
-#include <bpf/bpf_core_read.h>
+
+// TCP state constants (enum tcp_state from kernel, not always in vmlinux.h).
+#define TCP_ESTABLISHED 1
+#define TCP_SYN_SENT    2
+#define TCP_SYN_RECV    3
+#define TCP_FIN_WAIT1   4
+#define TCP_CLOSE_WAIT  8
+#define TCP_LAST_ACK    9
 
 struct conn_event {
-    __u32 saddr;
-    __u32 daddr;
-    __u16 sport;
-    __u16 dport;
-    __u16 family;
-    __u8  role;       // 1=主动连接(connect), 2=被动接受(accept)
-    __u8  pad;
-    __u64 duration_ns; // 连接持续时间（纳秒）
-    __u32 pid;
-    __u8  comm[16];
-    __u8  pad2[4];
+	__u32 saddr;
+	__u32 daddr;
+	__u16 sport;
+	__u16 dport;
+	__u16 family;
+	__u8  role;
+	__u8  pad;
+	__u64 duration_ns;
+	__u32 pid;
+	__u8  comm[16];
+	__u8  pad2[4];
 };
 
-// 连接起始时间记录 (key = sock pointer as u64)
 struct conn_info {
-    __u64 start_ns;
-    __u32 saddr;
-    __u32 daddr;
-    __u16 sport;
-    __u16 dport;
-    __u16 family;
-    __u32 pid;
-    __u8  role;
+	__u64 start_ns;
+	__u32 saddr;
+	__u32 daddr;
+	__u16 sport;
+	__u16 dport;
+	__u16 family;
+	__u32 pid;
+	__u8  role;
 };
 
+// Track in-flight connections by socket pointer.
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 32768);
-    __type(key, __u64);
-    __type(value, struct conn_info);
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 32768);
+	__type(key, __u64);
+	__type(value, struct conn_info);
 } conn_track SEC(".maps");
 
-// 连接事件 Ring Buffer
 struct {
-    __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1 << 24);
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 24);
 } conn_events SEC(".maps");
 
-// ---------- 采样/去重 ----------
+// Per-flow rate limit (1 emission per second).
 struct {
-    __uint(type, BPF_MAP_TYPE_HASH);
-    __uint(max_entries, 4096);
-    __type(key, __u64);
-    __type(value, __u64);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, 4096);
+	__type(key, __u64);
+	__type(value, __u64);
 } conn_rate_limit SEC(".maps");
 
-const __u64 conn_sampling_interval_ns = 1000000000; // 1 秒
-
-static int conn_should_sample(__u32 saddr, __u32 daddr, __u16 sport, __u16 dport) {
-    __u64 key = (__u64)saddr ^ (__u64)daddr ^ ((__u64)sport << 16) ^ (__u64)dport;
-    __u64 *last = bpf_map_lookup_elem(&conn_rate_limit, &key);
-    __u64 now = bpf_ktime_get_ns();
-    if (last && (now - *last) < conn_sampling_interval_ns) {
-        return 0;
-    }
-    __u64 val = now;
-    bpf_map_update_elem(&conn_rate_limit, &key, &val, BPF_ANY);
-    return 1;
+static __u64 flow_hash(__u32 sa, __u32 da, __u16 sp, __u16 dp) {
+	return (__u64)sa ^ (__u64)da ^ ((__u64)sp << 16) ^ (__u64)dp;
 }
 
-// ---------- kprobe/tcp_connect — 客户端发起连接 ----------
-SEC("kprobe/tcp_connect")
-int kprobe_tcp_connect(struct pt_regs *ctx) {
-    struct sock *sk = (struct sock *)ctx->di;
-    if (!sk) return 0;
-
-    __u64 sk_ptr = (__u64)sk;
-    __u32 pid = bpf_get_current_pid_tgid() >> 32;
-
-    struct conn_info info = {};
-    info.start_ns = bpf_ktime_get_ns();
-    info.role = 1;  // client
-    info.pid = pid;
-
-    BPF_CORE_READ_INTO(&info.family, sk, __sk_common.skc_family);
-    if (info.family == 2) {
-        BPF_CORE_READ_INTO(&info.saddr, sk, __sk_common.skc_rcv_saddr);
-        BPF_CORE_READ_INTO(&info.daddr, sk, __sk_common.skc_daddr);
-    } else if (info.family == 10) {
-        struct in6_addr v6_rcv, v6_dst;
-        BPF_CORE_READ_INTO(&v6_rcv, sk, __sk_common.skc_v6_rcv_saddr);
-        BPF_CORE_READ_INTO(&v6_dst, sk, __sk_common.skc_v6_daddr);
-        info.saddr = v6_rcv.in6_u.u6_addr32[3];
-        info.daddr = v6_dst.in6_u.u6_addr32[3];
-    } else {
-        return 0;
-    }
-
-    BPF_CORE_READ_INTO(&info.sport, sk, __sk_common.skc_num);
-    __u16 dport_be;
-    BPF_CORE_READ_INTO(&dport_be, sk, __sk_common.skc_dport);
-    info.dport = __builtin_bswap16(dport_be);
-
-    bpf_map_update_elem(&conn_track, &sk_ptr, &info, BPF_ANY);
-    return 0;
+// Convert tracepoint __u8[4] saddr to little-endian uint32.
+// The tracepoint stores the raw big-endian bytes from inet_saddr.
+// Go side reads via binary.LittleEndian + uint32ToIP, so the uint32
+// must be byte-reversed: IP 10.0.0.1 → bytes 0A 00 00 01 → uint32 0x0100000A.
+static __always_inline __u32 ipv4_from_bytes(const __u8 addr[4]) {
+	return ((__u32)addr[0]) |
+	       ((__u32)addr[1] << 8) |
+	       ((__u32)addr[2] << 16) |
+	       ((__u32)addr[3] << 24);
 }
 
-// ---------- kprobe/tcp_close — 连接关闭 ----------
-SEC("kprobe/tcp_close")
-int kprobe_tcp_close(struct pt_regs *ctx) {
-    struct sock *sk = (struct sock *)ctx->di;
-    if (!sk) return 0;
+SEC("tracepoint/sock/inet_sock_set_state")
+int tp_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
+{
+	int oldstate = ctx->oldstate;
+	int newstate = ctx->newstate;
 
-    __u64 sk_ptr = (__u64)sk;
-    struct conn_info *info = bpf_map_lookup_elem(&conn_track, &sk_ptr);
-    if (!info) return 0;  // 未跟踪的连接（如 accept 侧）
+	if (ctx->family != 2)  // AF_INET only
+		return 0;
 
-    __u64 now = bpf_ktime_get_ns();
-    __u64 duration_ns = now - info->start_ns;
+	__u64 sk_ptr = (__u64)ctx->skaddr;
+	if (!sk_ptr)
+		return 0;
 
-    // 采样检查
-    if (conn_should_sample(info->saddr, info->daddr, info->sport, info->dport)) {
-        struct conn_event *evt = bpf_ringbuf_reserve(&conn_events, sizeof(*evt), 0);
-        if (evt) {
-            evt->saddr = info->saddr;
-            evt->daddr = info->daddr;
-            evt->sport = info->sport;
-            evt->dport = info->dport;
-            evt->family = info->family;
-            evt->role = info->role;
-            evt->duration_ns = duration_ns;
-            evt->pid = info->pid;
-            bpf_get_current_comm(&evt->comm, sizeof(evt->comm));
-            bpf_ringbuf_submit(evt, 0);
-        }
-    }
+	// ── Connection established: record start time ──
+	if (newstate == TCP_ESTABLISHED) {
+		struct conn_info info = {};
+		info.start_ns = bpf_ktime_get_ns();
+		info.family = ctx->family;
+		info.sport = ctx->sport;
+		info.dport = ctx->dport;
+		info.saddr = ipv4_from_bytes(ctx->saddr);
+		info.daddr = ipv4_from_bytes(ctx->daddr);
+		info.pid = bpf_get_current_pid_tgid() >> 32;
 
-    bpf_map_delete_elem(&conn_track, &sk_ptr);
-    return 0;
+		// Determine role from previous state:
+		// SYN_SENT → ESTABLISHED = client (active open, role=1)
+		// SYN_RECV → ESTABLISHED = server (passive accept, role=2)
+		info.role = (oldstate == TCP_SYN_SENT) ? 1 : 2;
+
+		bpf_map_update_elem(&conn_track, &sk_ptr, &info, BPF_ANY);
+		return 0;
+	}
+
+	// ── Connection closing: compute duration, emit event ──
+	if (oldstate != TCP_ESTABLISHED)
+		return 0;
+	if (newstate != TCP_FIN_WAIT1 && newstate != TCP_CLOSE_WAIT &&
+	    newstate != TCP_LAST_ACK)
+		return 0;
+
+	struct conn_info *info = bpf_map_lookup_elem(&conn_track, &sk_ptr);
+	if (!info)
+		return 0;
+
+	__u64 now = bpf_ktime_get_ns();
+	__u64 duration_ns = now - info->start_ns;
+
+	// Rate limit: one emission per flow per second.
+	__u64 fk = flow_hash(info->saddr, info->daddr, info->sport, info->dport);
+	__u64 *last = bpf_map_lookup_elem(&conn_rate_limit, &fk);
+	if (last && (now - *last) < 1000000000ULL)
+		goto cleanup;
+	bpf_map_update_elem(&conn_rate_limit, &fk, &now, BPF_ANY);
+
+	// Skip connections shorter than 1ms (failed / aborted).
+	if (duration_ns < 1000000ULL)
+		goto cleanup;
+
+	struct conn_event *evt = bpf_ringbuf_reserve(&conn_events, sizeof(*evt), 0);
+	if (!evt)
+		goto cleanup;
+
+	__builtin_memset(evt, 0, sizeof(*evt));
+	evt->saddr = info->saddr;
+	evt->daddr = info->daddr;
+	evt->sport = info->sport;
+	evt->dport = info->dport;
+	evt->family = info->family;
+	evt->role = info->role;
+	evt->duration_ns = duration_ns;
+	evt->pid = info->pid;
+	bpf_get_current_comm(&evt->comm, sizeof(evt->comm));
+
+	bpf_ringbuf_submit(evt, 0);
+
+cleanup:
+	bpf_map_delete_elem(&conn_track, &sk_ptr);
+	return 0;
 }
 
 char LICENSE[] SEC("license") = "GPL";

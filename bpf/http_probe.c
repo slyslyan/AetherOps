@@ -1,4 +1,8 @@
 // bpf/http_probe.c — HTTP/gRPC uprobe 探针
+//
+// Reference design pattern: Pixie Stirling HTTP protocol detection (pixie-io/pixie)
+// Implementation written independently, no source code copied.
+//
 // 通过 uprobe 挂载 Go HTTP/gRPC 函数，解析请求路径、方法、状态码
 //
 // Go 1.17+ 寄存器 ABI (amd64):

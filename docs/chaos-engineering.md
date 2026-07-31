@@ -168,7 +168,7 @@ bash chaos/runner.sh --cleanup-only    # 紧急清理
 | Prometheus scrape 间隔 | 全部 | 默认假设 15s scrape_interval，环境变更须同步调整 DETECT_WAIT_SEC |
 | tcp_sendmsg 测内核缓冲 | 全部 | kprobe 测量内核缓冲拷贝时间 (~μs)，不受网络延迟影响。已通过 tcp_conntrack+tcp_rtt 独立 RTT 统计解决 |
 | iptables vs kprobe 层级 | 02 | iptables REJECT 在 netfilter 层发生，早于 TCP 栈，kprobe 无法观测 |
-| tcp_rtt 需长连接 | 01, 06 | `kretprobe/tcp_recvmsg` 需请求-响应对，短连接场景用 tcp_conntrack 替代 |
+| tcp_rtt 依赖 fentry | 01, 06 | `fentry/tcp_close` 需要 Linux 5.5+ BTF 支持，旧内核回退到 tcp_conntrack |
 | anomaly_cleared 恢复 | 全部 | P95 窗口 30 样本滚动需时间，120s 恢复等待可能不足 |
 
 ### 混沌实验实测发现 (2026-07-26 第二轮)
@@ -178,7 +178,7 @@ bash chaos/runner.sh --cleanup-only    # 紧急清理
 | anomaly_score 成功触发 | **突破** | 将 tcp_conntrack (连接级 RTT) 从 tcp_sendmsg 统计中独立后，200ms tc netem 触发 10 条边 anomaly_score > 0，max=21.83 |
 | 数据源选择是关键 | CRITICAL | `tcp_sendmsg` 测量内核缓冲拷贝 (~μs)，不受 tc netem 影响。`tcp_conntrack` 测量连接时长 (~ms)，包含网络延迟。分离统计后异常检测立即生效 |
 | MinLatThresholdMs 降低无效 | INFO | 从 10ms 降到 0.5ms 对 anomaly_score 无影响，确认问题在测量层而非阈值层 |
-| tcp_rtt 暂无数据 | INFO | `kretprobe/tcp_recvmsg` 需要长连接请求-响应对，业务流量积累后自然出现 |
+| tcp_rtt 内核 SRTT | INFO | `fentry/tcp_close` + 内核 `srtt_us` 在连接关闭时产出可靠的平滑 RTT，与 tcp_conntrack 互补 |
 | anomaly_cleared 恢复时间 | LOW | P95 窗口 (30 样本) 滚动需要时间，120s 恢复等待可能不足以让分数归零 |
 
 ## 10. 执行路线

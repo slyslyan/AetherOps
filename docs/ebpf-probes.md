@@ -6,11 +6,10 @@
                          ┌── tcp_sendmsg (kprobe)     ──→ main_events      ──→ 通用 TCP 流量
                          ├── tcp_sendmsg (kretprobe)
                          │
-                         ├── tcp_connect (kprobe)     ──→ conn_events       ──→ 连接生命周期
-                         ├── tcp_close (kprobe)
+                         ├── inet_sock_set_state (tp) ──→ conn_events       ──→ 连接生命周期
                          │
-                         ├── tcp_sendmsg (kprobe RTT) ──→ rtt_events        ──→ 请求级 RTT
-Linux Kernel            ├── tcp_recvmsg (kretprobe RTT)
+                         ├── tcp_close (fentry)        ──→ rtt_events        ──→ 内核 SRTT
+Linux Kernel            │
 TCP/IP Stack            │
                          ├── tcp_sendmsg (Redis)      ──→ redis_events      ──→ Redis 命令
                          │
@@ -62,8 +61,9 @@ tcp_sendmsg 入口 → bpf_map (PID→时间戳)
 ## 2. tcp_conntrack — 连接生命周期 RTT
 
 **文件**: `bpf/tcp_conntrack.c`
-**Hook**: kprobe `tcp_connect` + kprobe `tcp_close`
+**Hook**: tracepoint `sock/inet_sock_set_state`
 **事件类型**: `connEventRaw`
+**参考来源**: iovisor/bcc libbpf-tools/tcpstates (BSD-2 License)
 
 ```
 struct connEventRaw {
@@ -76,7 +76,7 @@ struct connEventRaw {
 }
 ```
 
-**测量原理**：`tcp_connect` 记录连接建立时间 → `tcp_close` 计算连接持续时长。
+**测量原理**：tracepoint `inet_sock_set_state` 捕获所有 TCP 状态转换。`TCP_ESTABLISHED` 时记录连接建立时间（根据 oldstate 区分 client/server 角色），进入 `TCP_FIN_WAIT1`/`TCP_CLOSE_WAIT`/`TCP_LAST_ACK` 时计算连接持续时长并输出事件。tracepoint 直接提供 sport/dport/saddr/daddr，无需 `BPF_CORE_READ`，比 kprobe 方案更可靠。
 
 **适用范围**：短连接（HTTP/1.0, DNS）的网络级 RTT 检测。长连接（MySQL 连接池）的 duration 会被过滤（> 30s 丢弃）。
 
@@ -84,26 +84,24 @@ struct connEventRaw {
 
 ---
 
-## 3. tcp_rtt — 请求级往返延迟
+## 3. tcp_rtt — 内核平滑 RTT
 
 **文件**: `bpf/tcp_rtt.c`
-**Hook**: kprobe `tcp_sendmsg` + kretprobe `tcp_recvmsg`
+**Hook**: fentry `tcp_close`
 **事件类型**: `netEventRaw`（复用）
+**参考来源**: cilium/ebpf examples/tcprtt (MIT License)
 
-**测量原理**：
-```
-tcp_sendmsg 入口 → 记录 sk_ptr + 时间戳 → BPF_MAP_TYPE_HASH(sk_ptr → timestamp)
-tcp_recvmsg 出口 → 查找 sk_ptr → 计算 RTT = now - timestamp
-```
+**测量原理**：`fentry/tcp_close` 在连接关闭时触发，通过 `BPF_CORE_READ(tcp_sock, srtt_us)` 直接读取内核 TCP 栈维护的平滑 RTT（SRTT）。内核从 ACK 往返计时中持续更新 `srtt_us`，比手动 send/recv 配对更可靠。值以微秒 << 3 存储，需 `>> 3 * 1000` 转换为纳秒。
 
-**关键设计**：用 `sk_ptr`（socket 指针）而非四元组做 key。同一 socket 在连接生命周期内 `sk_ptr` 不变，正确配 send/recv。四元组在端口复用场景下会误配。
+**关键设计**：fentry（trampoline-based hook）比 kprobe 更高效，无需保存中间状态（sk_ptr→timestamp 的 BPF map 不再需要）。每个连接关闭时仅产生一个 RTT 事件，包含连接生命周期内的平均 RTT。
 
-**RTT 范围过滤**：
-- RTT ≤ 0 → 丢弃（异常数据）
-- RTT > 30s → 丢弃（空闲 keep-alive，非真实请求）
+**RTT 范围过滤**（Go 侧）：
+- RTT ≤ 0 → 丢弃（内核尚未收集足够样本）
+- RTT > 30s → 丢弃（异常值）
 - 有效范围：(0, 30s]
+- 连接 < 1ms 在 BPF 侧过滤（失败/中止连接）
 
-**适用范围**：**长连接池** — MySQL, Redis, PgSQL, gRPC streaming。这是 `tcp_conntrack` 无法覆盖的场景。
+**适用范围**：所有 TCP 连接的关闭事件。`srtt_us` 是连接生命周期内的平均平滑 RTT，比单次 send/recv 配对更稳定。
 
 ---
 

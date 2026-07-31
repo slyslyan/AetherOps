@@ -34,7 +34,7 @@ flowchart TB
 
 | 层 | 要点 |
 |----|------|
-| **内核** | eBPF kprobe/kretprobe, TC, CO-RE, Ring Buffer（含 tcp_rtt 长连接 RTT 探针） |
+| **内核** | eBPF kprobe/kretprobe/fentry/tracepoint, TC, CO-RE, Ring Buffer（含内核 SRTT 探针） |
 | **数据面** | Go 1.24, cilium/ebpf, 滑动窗口 P95 + EMA, 反向随机游走 |
 | **认知面** | Python, Supervisor + Multi-Agent, LLM 诊断（启发式回退） |
 | **通信** | MCP 协议（JSON-RPC 2.0 over HTTP SSE） |

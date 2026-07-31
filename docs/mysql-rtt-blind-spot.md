@@ -7,7 +7,7 @@ The eBPF agent uses two mechanisms for latency measurement:
 | Mechanism | Hook | What it measures | Blind spot |
 |---|---|---|---|
 | `tcp_sendmsg` kprobe/kretprobe | Kernel send path | Kernel buffer copy time (~µs) | Not real RTT |
-| `tcp_conntrack` (tcp_close) | Connection close | Full connection lifetime | Pooled connections never close |
+| `tcp_conntrack` (tracepoint inet_sock_set_state) | Connection close | Full connection lifetime | Pooled connections never close |
 
 **Result**: For long-lived pooled connections (MySQL, Redis, PostgreSQL), neither mechanism captures request-level round-trip time. A MySQL query that takes 2000ms network RTT may appear as 0.05ms in the `tcp_sendmsg` trace.
 
@@ -32,32 +32,44 @@ Application                 MySQL
     |   tcp_close NEVER fires → duration NEVER measured
 ```
 
-## Solution: `tcp_rtt.c` — Request-Level RTT
+## Solution: `tcp_rtt.c` — Kernel Smoothed RTT (srtt_us)
 
 ### Design
 
-- **kprobe/tcp_sendmsg**: Records `{sk_ptr, send_ts_ns, pid, saddr, daddr, sport, dport}` in `rtt_track` hash map
-- **kretprobe/tcp_recvmsg**: Looks up entry by `sk_ptr`, computes `delta_ns = now - send_ts_ns`, submits to `rtt_events` ringbuf
-- **Keyed by `sk_ptr`** (socket pointer): Correctly pairs send/recv on the same TCP socket, even with concurrent requests
-- **Sampling**: 100µs per-flow rate limit to avoid ringbuf overflow
-- **Guard**: RTT > 30s is discarded (idle keep-alive, not a real request)
+- **fentry/tcp_close**: Triggers on every TCP connection close
+- **`BPF_CORE_READ(tcp_sock, srtt_us)`**: Reads kernel's exponentially smoothed RTT from ACK timing
+- **No intermediate state**: Unlike kprobe-based send/recv pairing, no BPF map tracks timestamps
+- **One event per connection**: `srtt_us` represents the average RTT over the connection lifetime
+- **Rate limit**: 1s per-flow rate limit to prevent ringbuf storms on mass closes
+- **Guard**: srtt_us == 0 events discarded (kernel hasn't gathered enough samples)
+
+### Why kernel SRTT beats manual send/recv pairing
+
+| Concern | Manual kprobe send/recv | Kernel srtt_us (fentry) |
+|---------|------------------------|-------------------------|
+| State management | Needs BPF hash map (sk_ptr→timestamp), risk of map full/leak | No state needed |
+| Accuracy | User-space timing includes scheduling jitter | Kernel maintains srtt from hardware ACK timestamps |
+| Concurrent requests | sk_ptr pairing can mis-pair under high concurrency | srtt is a connection-level smoothed average |
+| Overhead | One event per send/recv pair → high ringbuf pressure | One event per connection close |
+| Reliability | kprobe can be restricted/killed by security policies | fentry is trampoline-based, more stable |
 
 ### Data flow
 
 ```
-tcp_sendmsg(sk)                    tcp_recvmsg(sk) returns
-    |                                    |
-    v                                    v
-rtt_track[sk_ptr] = {ts}          lookup rtt_track[sk_ptr]
-                                  delta = now - ts
-                                  if delta < 30s:
-                                      submit net_event to rtt_events ringbuf
-                                  delete rtt_track[sk_ptr]
-                                         |
-                                         v
-                              Go: consumeRTTEvents() goroutine
-                              reads ringbuf, parses netEventRaw,
-                              calls graph.AddCall(src, dst, rttMs, isErr)
+tcp_close(sk)
+    |
+    v
+srtt_us = BPF_CORE_READ((struct tcp_sock *)sk, srtt_us)
+    |
+    v
+if srtt_us > 0:
+    rtt_ns = (srtt_us >> 3) * 1000   // µs<<3 → nanoseconds
+    submit net_event to rtt_events ringbuf (1/s per-flow rate limit)
+    |
+    v
+Go: consumeRTTEvents() goroutine
+reads ringbuf, parses netEventRaw,
+calls graph.AddRttCall(src, dst, rttMs)
 ```
 
 ### Files
@@ -71,14 +83,17 @@ rtt_track[sk_ptr] = {ts}          lookup rtt_track[sk_ptr]
 
 ### Comparison with existing probes
 
-| | `net_trace.c` (tracer) | `tcp_conntrack.c` | `tcp_rtt.c` (NEW) |
+| | `net_trace.c` (tracer) | `tcp_conntrack.c` | `tcp_rtt.c` |
 |---|---|---|---|
-| Hook | kprobe/kretprobe tcp_sendmsg | kprobe tcp_connect + tcp_close | kprobe tcp_sendmsg + kretprobe tcp_recvmsg |
-| Key | pid_tgid | sk_ptr | sk_ptr |
-| Measures | Kernel sendmsg duration | Connection lifetime | Request-response RTT |
-| Works for pooled conns | No (measures kernel time) | No (close never fires) | **Yes** |
+| Hook | kprobe/kretprobe tcp_sendmsg | tracepoint inet_sock_set_state | fentry tcp_close |
+| Key | pid_tgid | sk_ptr (conn_track map) | N/A (stateless) |
+| Measures | Kernel sendmsg duration (~µs) | Connection lifetime (~ms) | Kernel smoothed RTT (srtt_us) |
+| Works for pooled conns | No (measures kernel time) | No (close never fires) | No (fires on close) |
+| Data source | User-manual timing | Wall-clock duration | Kernel TCP stack's own RTT |
+| Accuracy | Low (scheduling jitter) | Medium | **High** (kernel ACK timing) |
 | Output ringbuf | `events` | `conn_events` | `rtt_events` |
 | Event struct | `net_event` | `conn_event` | `net_event` (reused) |
+| Reference | 自研 | iovisor/bcc tcpstates (BSD-2) | cilium/ebpf tcprtt (MIT) |
 
 ## Testing Process
 
@@ -115,8 +130,8 @@ mysql -h <target-ip> -e "SELECT SLEEP(0)"  # Simple query, should take ~2000ms d
 In the agent output, look for events from the `rtt_events` ringbuf:
 
 ```
-CONN client 10.42.0.1:45678 -> 10.42.0.15:3306 duration=0.05 ms pid=1234 (mysql)
-RTT  10.42.0.1:45678 -> 10.42.0.15:3306 rtt=2001.23 ms   # <-- This is the new signal
+CONN 10.42.0.1:45678 -> 10.42.0.15:3306 duration=2001.23 ms pid=1234 (mysql)  # tcp_conntrack: wall-clock duration
+RTT  10.42.0.1:45678 -> 10.42.0.15:3306 rtt=2001.45 ms                        # tcp_rtt: kernel SRTT (should be close)
 ```
 
 ### Step 5: Verify via MCP

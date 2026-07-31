@@ -1,5 +1,8 @@
 // bpf/redis_trace.c — Redis RESP 协议解析探针
 //
+// Reference design pattern: Pixie Stirling Redis protocol detection (pixie-io/pixie)
+// Implementation written independently, no source code copied.
+//
 // 通过 kprobe tcp_sendmsg 拦截 Redis 请求，解析 RESP 首行提取命令名。
 // 仅提取前 16 字节命令名（GET/SET/MGET 等），不做全量 key/value 解析。
 //

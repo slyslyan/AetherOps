@@ -12,18 +12,6 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type tcp_rttRttTrackInfo struct {
-	SendTsNs uint64
-	Saddr    uint32
-	Daddr    uint32
-	Sport    uint16
-	Dport    uint16
-	Family   uint16
-	_        [2]byte
-	Pid      uint32
-	_        [4]byte
-}
-
 // loadTcp_rtt returns the embedded CollectionSpec for tcp_rtt.
 func loadTcp_rtt() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_Tcp_rttBytes)
@@ -66,8 +54,7 @@ type tcp_rttSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tcp_rttProgramSpecs struct {
-	KprobeTcpSendmsgRtt    *ebpf.ProgramSpec `ebpf:"kprobe_tcp_sendmsg_rtt"`
-	KretprobeTcpRecvmsgRtt *ebpf.ProgramSpec `ebpf:"kretprobe_tcp_recvmsg_rtt"`
+	TcpClose *ebpf.ProgramSpec `ebpf:"tcp_close"`
 }
 
 // tcp_rttMapSpecs contains maps before they are loaded into the kernel.
@@ -77,14 +64,12 @@ type tcp_rttMapSpecs struct {
 	RttEvents         *ebpf.MapSpec `ebpf:"rtt_events"`
 	RttRateLimit      *ebpf.MapSpec `ebpf:"rtt_rate_limit"`
 	RttSamplingConfig *ebpf.MapSpec `ebpf:"rtt_sampling_config"`
-	RttTrack          *ebpf.MapSpec `ebpf:"rtt_track"`
 }
 
 // tcp_rttVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tcp_rttVariableSpecs struct {
-	RttDefaultIntervalNs *ebpf.VariableSpec `ebpf:"rtt_default_interval_ns"`
 }
 
 // tcp_rttObjects contains all objects after they have been loaded into the kernel.
@@ -110,7 +95,6 @@ type tcp_rttMaps struct {
 	RttEvents         *ebpf.Map `ebpf:"rtt_events"`
 	RttRateLimit      *ebpf.Map `ebpf:"rtt_rate_limit"`
 	RttSamplingConfig *ebpf.Map `ebpf:"rtt_sampling_config"`
-	RttTrack          *ebpf.Map `ebpf:"rtt_track"`
 }
 
 func (m *tcp_rttMaps) Close() error {
@@ -118,7 +102,6 @@ func (m *tcp_rttMaps) Close() error {
 		m.RttEvents,
 		m.RttRateLimit,
 		m.RttSamplingConfig,
-		m.RttTrack,
 	)
 }
 
@@ -126,21 +109,18 @@ func (m *tcp_rttMaps) Close() error {
 //
 // It can be passed to loadTcp_rttObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tcp_rttVariables struct {
-	RttDefaultIntervalNs *ebpf.Variable `ebpf:"rtt_default_interval_ns"`
 }
 
 // tcp_rttPrograms contains all programs after they have been loaded into the kernel.
 //
 // It can be passed to loadTcp_rttObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tcp_rttPrograms struct {
-	KprobeTcpSendmsgRtt    *ebpf.Program `ebpf:"kprobe_tcp_sendmsg_rtt"`
-	KretprobeTcpRecvmsgRtt *ebpf.Program `ebpf:"kretprobe_tcp_recvmsg_rtt"`
+	TcpClose *ebpf.Program `ebpf:"tcp_close"`
 }
 
 func (p *tcp_rttPrograms) Close() error {
 	return _Tcp_rttClose(
-		p.KprobeTcpSendmsgRtt,
-		p.KretprobeTcpRecvmsgRtt,
+		p.TcpClose,
 	)
 }
 

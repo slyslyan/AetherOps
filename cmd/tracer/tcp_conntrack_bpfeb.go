@@ -67,8 +67,7 @@ type tcp_conntrackSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tcp_conntrackProgramSpecs struct {
-	KprobeTcpClose   *ebpf.ProgramSpec `ebpf:"kprobe_tcp_close"`
-	KprobeTcpConnect *ebpf.ProgramSpec `ebpf:"kprobe_tcp_connect"`
+	TpSockSetState *ebpf.ProgramSpec `ebpf:"tp_sock_set_state"`
 }
 
 // tcp_conntrackMapSpecs contains maps before they are loaded into the kernel.
@@ -84,7 +83,6 @@ type tcp_conntrackMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type tcp_conntrackVariableSpecs struct {
-	ConnSamplingIntervalNs *ebpf.VariableSpec `ebpf:"conn_sampling_interval_ns"`
 }
 
 // tcp_conntrackObjects contains all objects after they have been loaded into the kernel.
@@ -124,21 +122,18 @@ func (m *tcp_conntrackMaps) Close() error {
 //
 // It can be passed to loadTcp_conntrackObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tcp_conntrackVariables struct {
-	ConnSamplingIntervalNs *ebpf.Variable `ebpf:"conn_sampling_interval_ns"`
 }
 
 // tcp_conntrackPrograms contains all programs after they have been loaded into the kernel.
 //
 // It can be passed to loadTcp_conntrackObjects or ebpf.CollectionSpec.LoadAndAssign.
 type tcp_conntrackPrograms struct {
-	KprobeTcpClose   *ebpf.Program `ebpf:"kprobe_tcp_close"`
-	KprobeTcpConnect *ebpf.Program `ebpf:"kprobe_tcp_connect"`
+	TpSockSetState *ebpf.Program `ebpf:"tp_sock_set_state"`
 }
 
 func (p *tcp_conntrackPrograms) Close() error {
 	return _Tcp_conntrackClose(
-		p.KprobeTcpClose,
-		p.KprobeTcpConnect,
+		p.TpSockSetState,
 	)
 }
 

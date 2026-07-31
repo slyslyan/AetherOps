@@ -21,8 +21,8 @@ AetherOps 采用三层架构：**内核采集层** → **Go 数据面** → **Py
                             │ Ring Buffer
 ┌───────────────────────────┴─────────────────────────────────────┐
 │                    Linux 内核 (Kernel Space)                      │
-│  kprobe/kretprobe: tcp_sendmsg, tcp_connect, tcp_close,         │
-│                    tcp_recvmsg                                    │
+│  kprobe/kretprobe: tcp_sendmsg                                    │
+│  fentry: tcp_close          tracepoint: inet_sock_set_state      │
 │  TC clsact: 丢包熔断                                              │
 │  uprobe: net/http.(*conn).readRequest, WriteHeader               │
 │  BPF CO-RE: 跨内核版本兼容                                         │
@@ -37,8 +37,8 @@ AetherOps 采用三层架构：**内核采集层** → **Go 数据面** → **Py
 
 ```
 tcp_sendmsg (kprobe) ──→ main_events (ringbuf)
-tcp_connect/close     ──→ conn_events (ringbuf)
-tcp_sendmsg/recvmsg   ──→ rtt_events (ringbuf)
+inet_sock_set_state   ──→ conn_events (ringbuf)
+tcp_close (fentry)    ──→ rtt_events (ringbuf)
 tcp_sendmsg (redis)   ──→ redis_events (ringbuf)
 tcp_sendmsg (proto)   ──→ proto_events (ringbuf)
 tcp_sendmsg (trace)   ──→ trace_context_events (ringbuf)
@@ -95,9 +95,9 @@ suspects []Suspicion (按分数降序)
 
 ## 关键设计决策
 
-### 为什么 tcp_rtt 用 sk_ptr 而非四元组做 key
+### 为什么 tcp_rtt 用 fentry/tcp_close + 内核 SRTT 而非手动 send/recv 配对
 
-`tcp_sendmsg` 的 `struct sock *` 指针在连接生命周期内不变，用它做 key 可以正确配同一 socket 的 send/recv 事件。用四元组 (saddr, daddr, sport, dport) 在端口复用场景下会错误配对。
+`fentry/tcp_close` 在连接关闭时触发，通过 `BPF_CORE_READ(tcp_sock, srtt_us)` 直接读取内核 TCP 栈维护的平滑 RTT。内核从每次 ACK 往返计时中持续更新 `srtt_us`，比用户态手动在 `tcp_sendmsg`/`tcp_recvmsg` 之间配对更可靠 — 不需要维护中间状态（无 BPF map 泄漏风险），也不受端口复用、goroutine 并发等用户态因素干扰。参考 cilium/ebpf tcprtt 示例 (MIT License)。
 
 ### 为什么 BaselineP95 需要门控
 

@@ -70,19 +70,23 @@ docker-compose.aetherops.yml  一键启动认知平面 + Prometheus + Grafana
 
 ## eBPF 探针架构
 
-| 探针 | C 文件 | Hook 点 | 测量内容 | 适用场景 |
+| 探针 | C 文件 | Hook 点 | 测量内容 | 参考来源 |
 |---|---|---|---|---|
-| tracer | `bpf/net_trace.c` | kprobe/kretprobe tcp_sendmsg | 内核缓冲拷贝时间（~µs） | 通用流量拓扑发现 |
-| tcp_conntrack | `bpf/tcp_conntrack.c` | kprobe tcp_connect + tcp_close | 连接生命周期 RTT（~ms） | 短连接 RTT 检测，tc netem 等网络级故障 |
-| tcp_rtt | `bpf/tcp_rtt.c` | kprobe tcp_sendmsg + kretprobe tcp_recvmsg | 请求级往返延迟（~ms） | **长连接池**（MySQL, Redis, PgSQL）请求级 RTT |
-| tc_drop | `bpf/tc_drop.c` | TC clsact | 丢包 | 自愈熔断 |
-| http_probe | `bpf/http_probe.c` | uprobe HTTP handler | HTTP 请求耗时 | HTTP 服务细分 |
+| tracer | `bpf/net_trace.c` | kprobe/kretprobe tcp_sendmsg | 内核缓冲拷贝时间（~µs） | 自研 |
+| tcp_conntrack | `bpf/tcp_conntrack.c` | tracepoint sock/inet_sock_set_state | 连接生命周期 RTT（~ms） | BCC tcpstates (BSD-2) |
+| tcp_rtt | `bpf/tcp_rtt.c` | fentry tcp_close | 内核 SRTT（~µs 级） | cilium/ebpf tcprtt (MIT) |
+| tc_drop | `bpf/tc_drop.c` | TC clsact | 丢包 | 自研 |
+| http_probe | `bpf/http_probe.c` | uprobe HTTP handler | HTTP 请求耗时 | 自研（参考 Pixie 设计范式） |
+| redis_trace | `bpf/redis_trace.c` | kprobe tcp_sendmsg (6379) | Redis 命令名 | 自研（参考 Pixie 设计范式） |
+| proto_classifier | `bpf/proto_classifier.c` | kprobe tcp_sendmsg | 协议类型自动识别 | 自研（参考 Pixie 设计范式） |
+| trace_context | `bpf/trace_context.c` | kprobe tcp_sendmsg | W3C/Jaeger/Datadog TraceID | 自研 |
 
 关键设计：
-- `tcp_rtt.c` 用 `sk_ptr`（socket 指针）做 key，正确配对同一 socket 的 send/recv
+- `tcp_rtt.c` 使用 fentry/tcp_close 读取内核 `tcp_sock->srtt_us`（平滑 RTT），比手动 send/recv 配对更可靠
+- `tcp_conntrack.c` 使用 tracepoint 代替 kprobe，直接获取 sport/dport/saddr/daddr，无需 BPF_CORE_READ
 - `tcp_rtt.c` 和 `tcp_conntrack.c` 各有独立 ringbuf，互不干扰
-- RTT > 30s 的事件被丢弃（空闲 keep-alive 非真实请求）
-- `tcp_sendmsg` 测量的是内核缓冲拷贝时间（~µs），**不受网络延迟影响**；网络级故障检测依赖 `tcp_conntrack`（连接级）和 `tcp_rtt`（请求级）作为 RTT 数据源
+- 短连接 (<1ms) 的 conntrack 事件被丢弃（失败/中止连接）
+- `tcp_sendmsg` 测量的是内核缓冲拷贝时间（~µs），**不受网络延迟影响**；网络级故障检测依赖 `tcp_conntrack`（连接级）和 `tcp_rtt`（内核 SRTT）作为 RTT 数据源
 
 ## 异常检测阈值
 

@@ -172,7 +172,8 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	go a.consumeHTTPEvents(ctx)
 
-	// ===== tcp_conntrack =====
+	// ===== tcp_conntrack（tracepoint sock/inet_sock_set_state） =====
+	// Reference: iovisor/bcc libbpf-tools/tcpstates (BSD-2 License)
 	connObjs := tcp_conntrackObjects{}
 	if err := loadTcp_conntrackObjects(&connObjs, nil); err != nil {
 		a.mainRd.Close()
@@ -183,32 +184,19 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.connObjs = connObjs
 
-	kpConn, err := link.Kprobe("tcp_connect", connObjs.KprobeTcpConnect, nil)
+	tpConn, err := link.Tracepoint("sock", "inet_sock_set_state", connObjs.TpSockSetState, nil)
 	if err != nil {
 		a.connObjs.Close()
 		a.mainRd.Close()
 		a.kpExit.Close()
 		a.kpEnter.Close()
 		a.tracerObjs.Close()
-		return fmt.Errorf("attach kprobe/tcp_connect (%v): %w", err, apperrors.ErrKprobeAttach)
+		return fmt.Errorf("attach tracepoint/sock/inet_sock_set_state (%v): %w", err, apperrors.ErrKprobeAttach)
 	}
-	a.kpConn = kpConn
-
-	kpClose, err := link.Kprobe("tcp_close", connObjs.KprobeTcpClose, nil)
-	if err != nil {
-		a.kpConn.Close()
-		a.connObjs.Close()
-		a.mainRd.Close()
-		a.kpExit.Close()
-		a.kpEnter.Close()
-		a.tracerObjs.Close()
-		return fmt.Errorf("attach kprobe/tcp_close (%v): %w", err, apperrors.ErrKprobeAttach)
-	}
-	a.kpClose = kpClose
+	a.kpConn = tpConn // tracepoint link stored here; kpClose stays nil
 
 	connRd, err := ringbuf.NewReader(connObjs.ConnEvents)
 	if err != nil {
-		a.kpClose.Close()
 		a.kpConn.Close()
 		a.connObjs.Close()
 		a.mainRd.Close()
@@ -219,39 +207,31 @@ func (a *App) Start(ctx context.Context) error {
 	}
 	a.connRd = connRd
 
-	// ===== TCP RTT（请求级往返延迟） =====
+	// ===== TCP RTT（fentry tcp_close + kernel srtt_us） =====
+	// Reference: cilium/ebpf examples/tcprtt (MIT License)
 	rttObjs := tcp_rttObjects{}
 	if err := loadTcp_rttObjects(&rttObjs, nil); err != nil {
 		slog.Info(fmt.Sprintf("tcp_rtt load failed (RTT measurement unavailable): %v", err))
 	} else {
 		a.rttObjs = rttObjs
 
-		kpSendRtt, err := link.Kprobe("tcp_sendmsg", rttObjs.KprobeTcpSendmsgRtt, nil)
+		fentryRtt, err := link.AttachTracing(link.TracingOptions{
+			Program: rttObjs.TcpClose,
+		})
 		if err != nil {
-			slog.Info(fmt.Sprintf("tcp_rtt kprobe/tcp_sendmsg attach failed: %v", err))
+			slog.Info(fmt.Sprintf("tcp_rtt fentry/tcp_close attach failed: %v", err))
 			a.rttObjs.Close()
 		} else {
-			a.kpSendRtt = kpSendRtt
-			kpRecvRtt, err := link.Kretprobe("tcp_recvmsg", rttObjs.KretprobeTcpRecvmsgRtt, nil)
+			a.kpSendRtt = fentryRtt // reuse field for fentry link
+			rttRd, err := ringbuf.NewReader(rttObjs.RttEvents)
 			if err != nil {
-				slog.Info(fmt.Sprintf("tcp_rtt kretprobe/tcp_recvmsg attach failed: %v", err))
+				slog.Info(fmt.Sprintf("tcp_rtt ringbuf create failed: %v", err))
 				a.kpSendRtt.Close()
 				a.rttObjs.Close()
 				a.kpSendRtt = nil
 			} else {
-				a.kpRecvRtt = kpRecvRtt
-				rttRd, err := ringbuf.NewReader(rttObjs.RttEvents)
-				if err != nil {
-					slog.Info(fmt.Sprintf("tcp_rtt ringbuf create failed: %v", err))
-					a.kpRecvRtt.Close()
-					a.kpSendRtt.Close()
-					a.rttObjs.Close()
-					a.kpRecvRtt = nil
-					a.kpSendRtt = nil
-				} else {
-					a.rttRd = rttRd
-					slog.Info("tcp_rtt probes loaded — request-level RTT measurement active")
-				}
+				a.rttRd = rttRd
+				slog.Info("tcp_rtt fentry loaded — kernel SRTT measurement active (cilium/ebpf tcprtt pattern)")
 			}
 		}
 	}
@@ -380,13 +360,10 @@ func (a *App) Shutdown(ctx context.Context) {
 	if a.rttRd != nil {
 		a.rttRd.Close()
 	}
-	if a.kpRecvRtt != nil {
-		a.kpRecvRtt.Close()
-	}
 	if a.kpSendRtt != nil {
 		a.kpSendRtt.Close()
 	}
-	if a.rttObjs.tcp_rttPrograms.KprobeTcpSendmsgRtt != nil {
+	if a.rttObjs.TcpClose != nil {
 		a.rttObjs.Close()
 	}
 	if a.kpExit != nil {
@@ -398,13 +375,10 @@ func (a *App) Shutdown(ctx context.Context) {
 	if a.kpConn != nil {
 		a.kpConn.Close()
 	}
-	if a.kpClose != nil {
-		a.kpClose.Close()
-	}
 	if a.tracerObjs.tracerPrograms.KprobeTcpSendmsg != nil {
 		a.tracerObjs.Close()
 	}
-	if a.connObjs.KprobeTcpConnect != nil {
+	if a.connObjs.TpSockSetState != nil {
 		a.connObjs.Close()
 	}
 	if a.redisRd != nil {

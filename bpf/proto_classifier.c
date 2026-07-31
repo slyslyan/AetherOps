@@ -1,5 +1,8 @@
 // bpf/proto_classifier.c — 应用协议自动发现
 //
+// Reference design pattern: Pixie Stirling L7 protocol detection (pixie-io/pixie)
+// Implementation written independently, no source code copied.
+//
 // 通过 kprobe tcp_sendmsg 读取 payload 前若干字节的 magic bytes，
 // 自动识别协议类型并标注拓扑边。不解析协议内容，仅做分类。
 //
