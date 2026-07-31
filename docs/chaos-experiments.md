@@ -26,4 +26,4 @@ bash chaos/runner.sh --cleanup-only
 
 ## 核心发现
 
-**anomaly_score 一直为 0 的根因**：`tcp_sendmsg` kprobe 测量的是内核缓冲拷贝时间（~µs），不受 tc netem 网络延迟影响。将 `tcp_conntrack`（连接生命周期 RTT）和 `tcp_rtt`（请求级往返延迟）独立统计后，异常检测立即生效。
+**anomaly_score 一直为 0 的根因**：`tcp_sendmsg` kprobe 测量的是内核缓冲拷贝时间（~µs），不受 tc netem 网络延迟影响。将 `tcp_conntrack`（连接生命周期 RTT）和 `tcp_rtt`（内核 SRTT）独立统计后，异常检测立即生效。

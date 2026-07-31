@@ -14,7 +14,7 @@ Go 数据面可脱离认知面独立运行，内置本地专家规则引擎作�
 ```mermaid
 flowchart TB
     subgraph Kernel["Linux 内核"]
-        A1["kprobe tcp_sendmsg<br/>tcp_connect / tcp_close<br/>tcp_recvmsg"]
+        A1["kprobe tcp_sendmsg<br/>fentry tcp_close<br/>tracepoint inet_sock_set_state"]
         A2["TC clsact<br/>丢包熔断"]
     end
 
@@ -60,8 +60,8 @@ flowchart TB
 | 探针 | C 文件 | Hook 点 | 测量内容 | 适用场景 |
 |------|--------|---------|----------|----------|
 | **tracer** | `bpf/net_trace.c` | kprobe/kretprobe `tcp_sendmsg` | 内核缓冲拷贝时间 (µs) | 通用 TCP 流量拓扑 |
-| **tcp_conntrack** | `bpf/tcp_conntrack.c` | kprobe `tcp_connect` + `tcp_close` | 连接生命周期 RTT（~ms） | 短连接 RTT 检测，tc netem 等网络级故障 |
-| **tcp_rtt** | `bpf/tcp_rtt.c` | kprobe `tcp_sendmsg` + kretprobe `tcp_recvmsg` | 请求级往返延迟（~ms） | **长连接池** (MySQL, Redis, PgSQL) 请求级 RTT |
+| **tcp_conntrack** | `bpf/tcp_conntrack.c` | tracepoint `sock/inet_sock_set_state` | 连接生命周期 RTT（~ms） | 短连接 RTT 检测，tc netem 等网络级故障 |
+| **tcp_rtt** | `bpf/tcp_rtt.c` | fentry `tcp_close` | 内核平滑 RTT（srtt_us） | 连接关闭时读取内核 TCP 栈 RTT |
 | **tc_drop** | `bpf/tc_drop.c` | TC clsact | 丢包 | 自愈熔断 |
 | **http_probe** | `bpf/http_probe.c` | uprobe HTTP/gRPC handler | HTTP 请求耗时 + 状态码 | HTTP 服务细分 |
 | **redis_trace** | `bpf/redis_trace.c` | kprobe `tcp_sendmsg` (6379 端口) | Redis 命令名 (GET/SET/MGET...) | Redis 协议发现 |
@@ -69,10 +69,11 @@ flowchart TB
 | **trace_context** | `bpf/trace_context.c` | kprobe `tcp_sendmsg` | W3C/Jaeger/Datadog TraceID/SpanID | 指标-拓扑-trace 三位一体 |
 
 关键设计：
-- `tcp_rtt.c` 用 `sk_ptr`（socket 指针）做 key，正确配同一 socket 的 send/recv，解决长连接 RTT 盲区
+- `tcp_rtt.c` 使用 fentry/tcp_close + `BPF_CORE_READ(tcp_sock, srtt_us)` 直接读取内核平滑 RTT（cilium/ebpf tcprtt 模式，MIT License），零中间状态，比手动 send/recv 配对更可靠
+- `tcp_conntrack.c` 使用 tracepoint `inet_sock_set_state` 捕获 TCP 状态转换（BCC tcpstates 模式，BSD-2 License），tracepoint 直接提供五元组，无需 BPF_CORE_READ
 - 各探针独立 Ring Buffer，消费 goroutine 并行处理，互不阻塞
-- RTT > 30s 的事件被丢弃（空闲 keep-alive 非真实请求）
-- `tcp_sendmsg` 测量内核缓冲拷贝（~µs），不受网络延迟影响；网络级故障检测依赖 `tcp_conntrack`（连接级）和 `tcp_rtt`（请求级）
+- RTT > 30s 的事件被丢弃（异常值）；连接 < 1ms 在 BPF 侧过滤（失败/中止连接）
+- `tcp_sendmsg` 测量内核缓冲拷贝（~µs），不受网络延迟影响；网络级故障检测依赖 `tcp_conntrack`（连接级 wall-clock）和 `tcp_rtt`（内核 SRTT）双数据源
 - BPF verifier 约束：所有字符串比较展开为无循环字节匹配
 
 ## 核心能力

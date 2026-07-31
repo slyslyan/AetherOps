@@ -17,7 +17,7 @@
 ## [1.0.0] — 2026-07-25
 
 ### 新增
-- **8 个 eBPF 探针**：tracer (TCP)、tcp_conntrack (连接生命周期)、tcp_rtt (请求级 RTT)、tc_drop (丢包熔断)、http_probe (HTTP uprobe)、redis_trace (Redis 协议)、proto_classifier (协议自动发现)、trace_context (W3C/Jaeger/Datadog TraceID 提取)
+- **8 个 eBPF 探针**：tracer (TCP)、tcp_conntrack (连接生命周期)、tcp_rtt (内核 SRTT)、tc_drop (丢包熔断)、http_probe (HTTP uprobe)、redis_trace (Redis 协议)、proto_classifier (协议自动发现)、trace_context (W3C/Jaeger/Datadog TraceID 提取)
 - **ServiceGraph**：滑动窗口 P95 + EMA 基线 + 双峰流量门控
 - **三维异常检测**：延迟异常 (P95 偏离度) + 调用量异常 (QPS 突变) + 错误率
 - **反向随机游走根因分析**：沿拓扑反向传播异常分数，故障聚类

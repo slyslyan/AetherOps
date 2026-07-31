@@ -158,7 +158,7 @@
 | `ebpf_events_per_second` | Gauge | — | eBPF 事件吞吐率 |
 | `ebpf_agent_health` | Gauge | component | 组件健康状态 (1/0) |
 
-**component 标签值**：`tcp_sendmsg_probe`, `tcp_connect_probe`, `tcp_rtt_probe`, `redis_probe`, `proto_classifier_probe`, `trace_context_probe`, `mcp_server`, `http_server`
+**component 标签值**：`tcp_sendmsg_probe`, `tcp_conntrack_probe`, `tcp_rtt_probe`, `redis_probe`, `proto_classifier_probe`, `trace_context_probe`, `mcp_server`, `http_server`
 
 ### Grafana 集成
 
