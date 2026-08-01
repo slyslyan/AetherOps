@@ -41,7 +41,7 @@ struct netEventRaw {
 
 **测量原理**：`tcp_sendmsg` 入口记录时间戳 → 出口计算 delta = 内核缓冲拷贝时间。约 µs 级。
 
-**重要限制**：`tcp_sendmsg` 测量的是内核缓冲拷贝（~µs），**不受 tc netem 等网络级延迟影响**。网络故障检测必须依赖 `tcp_conntrack`（连接级 RTT）或 `tcp_rtt`（请求级 RTT）作为延迟数据源。Go 侧异常检测已实现双源切换：`latRatio = max(sendmsgLatRatio, rttLatRatio)`。
+**重要限制**：`tcp_sendmsg` 测量的是内核缓冲拷贝（~µs），**不受 tc netem 等网络级延迟影响**。网络故障检测必须依赖 `tcp_conntrack`（连接级 RTT）或 `tcp_rtt`（内核 SRTT）作为延迟数据源。Go 侧异常检测已实现双源切换：`latRatio = max(sendmsgLatRatio, rttLatRatio)`。
 
 **数据通路**：
 ```

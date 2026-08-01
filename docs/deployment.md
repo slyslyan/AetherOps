@@ -223,7 +223,7 @@ curl -s http://localhost:2112/metrics | grep -E 'ebpf_agent_up|ebpf_agent_health
 
 ```bash
 # 检查挂载的 BPF 程序
-sudo bpftool prog list | grep -A2 'tcp_sendmsg\|tcp_connect\|tcp_close'
+sudo bpftool prog list | grep -A2 'tcp_sendmsg\|tcp_close\|inet_sock_set_state'
 
 # 检查 BPF maps
 sudo bpftool map list | grep 'events\|sampling'

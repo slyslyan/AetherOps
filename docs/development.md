@@ -68,7 +68,7 @@ internal/            所有业务逻辑，外部不可导入
 bpf/
   net_trace.c         主探针
   tcp_conntrack.c     连接跟踪
-  tcp_rtt.c           请求级 RTT
+  tcp_rtt.c           内核 SRTT (fentry)
   tc_drop.c           TC 丢包
   http_probe.c        HTTP uprobe
   redis_trace.c       Redis 协议
@@ -256,7 +256,7 @@ go test -cover ./internal/...
 
 ```bash
 # 检查 BPF 程序加载状态
-sudo bpftool prog list | grep -A5 'tcp_sendmsg\|tcp_connect'
+sudo bpftool prog list | grep -A5 'tcp_sendmsg\|tcp_close\|inet_sock_set_state'
 
 # 检查 map 数据
 sudo bpftool map dump name events
