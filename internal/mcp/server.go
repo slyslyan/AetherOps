@@ -19,10 +19,10 @@ import (
 
 // Server 封装 MCP 服务。
 type Server struct {
-	mcp       *server.MCPServer
+	mcp        *server.MCPServer
 	streamable *server.StreamableHTTPServer
-	httpS     *http.Server
-	addr      string
+	httpS      *http.Server
+	addr       string
 
 	graph      *graph.ServiceGraph
 	mitigation *remediation.Service
