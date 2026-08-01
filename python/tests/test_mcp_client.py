@@ -28,15 +28,15 @@ def mcp_addr():
 
 
 def test_client_init():
-    """Client initialises with correct SSE URL."""
+    """Client initialises with correct MCP URL."""
     c = MCPClient("http://localhost:50052")
-    assert c._sse_url == "http://localhost:50052/sse"
+    assert c._mcp_url == "http://localhost:50052/mcp"
 
 
 def test_client_init_trailing_slash():
     """Trailing slash is stripped."""
     c = MCPClient("http://localhost:50052/")
-    assert c._sse_url == "http://localhost:50052/sse"
+    assert c._mcp_url == "http://localhost:50052/mcp"
 
 
 @pytest.mark.asyncio
@@ -49,9 +49,9 @@ async def test_connect():
     mock_session.list_tools = AsyncMock()
     mock_session.list_tools.return_value.tools = []
 
-    mock_sse = MagicMock()
-    mock_sse.__aenter__.return_value = (MagicMock(), MagicMock())
-    with patch("aetherops.core.mcp_client.sse_client", return_value=mock_sse), \
+    mock_http = MagicMock()
+    mock_http.__aenter__.return_value = (MagicMock(), MagicMock(), MagicMock())
+    with patch("aetherops.core.mcp_client.streamable_http_client", return_value=mock_http), \
          patch("aetherops.core.mcp_client.ClientSession", return_value=mock_session):
         await c.connect()
         assert c._session is not None

@@ -34,7 +34,7 @@ flowchart TB
     E --> F
     G --> H
 
-    F -- "JSON-RPC 2.0<br/>HTTP SSE" --> I
+    F -- "JSON-RPC 2.0<br/>Streamable HTTP" --> I
 
     subgraph Python["Python 认知面 (Cognitive Plane)"]
         I["Supervisor Agent"]
@@ -193,8 +193,7 @@ sudo systemctl start aetherops-tracer aetherops-core
 
 | 服务 | 地址 | 说明 |
 |------|------|------|
-| MCP SSE | http://127.0.0.1:50052/sse | JSON-RPC 2.0 over SSE |
-| MCP Message | http://127.0.0.1:50052/message | JSON-RPC 请求端点 |
+| MCP Streamable | http://127.0.0.1:50052/mcp | JSON-RPC 2.0 over Streamable HTTP |
 | MCP Health | http://127.0.0.1:50052/healthz | MCP 健康检查 |
 | Prometheus | http://127.0.0.1:2112/metrics | Prometheus 指标 |
 | Health | http://127.0.0.1:2112/healthz | Agent 健康检查 |

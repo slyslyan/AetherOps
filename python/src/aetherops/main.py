@@ -79,8 +79,8 @@ class AetherOpsDaemon:
             logger.warning("Metrics server failed to start (%s) — continuing", e)
 
     async def start(self):
-        """Start listening for anomaly events via MCP SSE stream."""
-        # MCP path — subscribe via SSE
+        """Start listening for anomaly events via MCP Streamable HTTP stream."""
+        # MCP path — subscribe via Streamable HTTP
         mcp_addr = os.getenv("AETHEROPS_MCP_ADDR", "http://localhost:50052")
         self.client = MCPClient(address=mcp_addr)
         await self.client.connect()
@@ -88,7 +88,7 @@ class AetherOpsDaemon:
 
         min_score = float(os.getenv("ANOMALY_MIN_SCORE", "0.5"))
         self._start_metrics_server()
-        logger.info("AetherOps daemon started (MCP/SSE). Watching for anomalies (min_score=%.2f)...", min_score)
+        logger.info("AetherOps daemon started (MCP/Streamable HTTP). Watching for anomalies (min_score=%.2f)...", min_score)
 
         try:
             async for event in self.client.subscribe_anomalies(min_score=min_score):

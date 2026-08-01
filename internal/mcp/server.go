@@ -19,10 +19,10 @@ import (
 
 // Server 封装 MCP 服务。
 type Server struct {
-	mcp   *server.MCPServer
-	sse   *server.SSEServer
-	httpS *http.Server
-	addr  string
+	mcp       *server.MCPServer
+	streamable *server.StreamableHTTPServer
+	httpS     *http.Server
+	addr      string
 
 	graph      *graph.ServiceGraph
 	mitigation *remediation.Service
@@ -61,16 +61,15 @@ func NewServer(addr string, g *graph.ServiceGraph, mit *remediation.Service, pol
 	s.registerTools()
 	s.registerResources()
 
-	sseServer := server.NewSSEServer(mcpServer)
-	s.sse = sseServer
+	streamableServer := server.NewStreamableHTTPServer(mcpServer)
+	s.streamable = streamableServer
 	return s
 }
 
 // Start 启动 HTTP 服务。
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
-	mux.Handle("/sse", s.sse.SSEHandler())
-	mux.Handle("/message", s.sse.MessageHandler())
+	mux.Handle("/mcp", s.streamable)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{

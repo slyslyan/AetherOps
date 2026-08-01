@@ -1,8 +1,9 @@
 """
 AetherOps — MCP client for the Go data plane using the official MCP SDK.
 
-Connects to the Go MCP server via SSE transport, discovers available tools
-and resources dynamically, and provides typed wrappers for the cognitive plane.
+Connects to the Go MCP server via Streamable HTTP transport, discovers
+available tools and resources dynamically, and provides typed wrappers for
+the cognitive plane.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from typing import Any, AsyncIterator, List, Optional
 
 from anyio.streams.memory import MemoryObjectReceiveStream
 from mcp import ClientSession
-from mcp.client.sse import sse_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCNotification
 
@@ -120,12 +121,15 @@ class _AnomalyFilter:
     async def receive(self):
         while True:
             msg = await self._inner.receive()
-            if isinstance(msg, SessionMessage):
-                root = msg.message.root
-                if isinstance(root, JSONRPCNotification):
-                    if root.method == "notifications/events/anomaly":
-                        self._on_anomaly(root.params or {})
-                        continue
+            # Streamable HTTP read stream may carry Exception elements; pass
+            # them through untouched — the session's receive loop handles them.
+            if not isinstance(msg, SessionMessage):
+                return msg
+            root = msg.message.root
+            if isinstance(root, JSONRPCNotification):
+                if root.method == "notifications/events/anomaly":
+                    self._on_anomaly(root.params or {})
+                    continue
             return msg
 
     def receive_nowait(self):
@@ -190,15 +194,15 @@ class AnomalyEvent:
 class MCPClient:
     """MCP client connecting to the AetherOps Go data plane via the official MCP SDK.
 
-    Uses SSE transport to communicate with the MCP server.
+    Uses Streamable HTTP transport to communicate with the MCP server.
     Tools and resources are discovered dynamically at connection time.
     """
 
     def __init__(self, address: str = "http://localhost:50052"):
         self.address = address.rstrip("/")
-        self._sse_url = f"{self.address}/sse"
+        self._mcp_url = f"{self.address}/mcp"
         self._session: Optional[ClientSession] = None
-        self._sse_ctx = None
+        self._http_ctx = None
         self._tools: List[dict] = []
         self._resources: List[dict] = []
         self._anomaly_queue = asyncio.Queue()
@@ -207,8 +211,8 @@ class MCPClient:
         """Establish connection and discover available tools/resources."""
         global _SESSION_LOOP
         _SESSION_LOOP = asyncio.get_running_loop()
-        self._sse_ctx = sse_client(self._sse_url)
-        read, write = await self._sse_ctx.__aenter__()
+        self._http_ctx = streamable_http_client(self._mcp_url)
+        read, write, _ = await self._http_ctx.__aenter__()
         # Wrap read stream to intercept anomaly notifications before the
         # session's strict ServerNotification validation drops them.
         read = _AnomalyFilter(read, self._on_anomaly)
@@ -235,7 +239,7 @@ class MCPClient:
 
     def close(self) -> None:
         """Close the MCP session synchronously."""
-        if self._session or self._sse_ctx:
+        if self._session or self._http_ctx:
             try:
                 run_async(self._async_close())
             except Exception:
@@ -249,12 +253,12 @@ class MCPClient:
             except Exception:
                 pass
             self._session = None
-        if self._sse_ctx:
+        if self._http_ctx:
             try:
-                await self._sse_ctx.__aexit__(None, None, None)
+                await self._http_ctx.__aexit__(None, None, None)
             except Exception:
                 pass
-            self._sse_ctx = None
+            self._http_ctx = None
         _SESSION_LOOP = None
 
     def list_discovered_tools(self) -> List[dict]:

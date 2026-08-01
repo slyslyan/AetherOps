@@ -2,9 +2,8 @@
 
 ## 协议概述
 
-- **协议**: JSON-RPC 2.0 over HTTP SSE (Server-Sent Events)
-- **发现端点**: `GET /sse` — SSE 连接建立，返回 session ID
-- **消息端点**: `POST /message?sessionId=<id>` — JSON-RPC 请求/响应
+- **协议**: JSON-RPC 2.0 over Streamable HTTP
+- **MCP 端点**: `POST/GET /mcp` — 单端点承载所有 JSON-RPC 消息;GET 建立长轮询会话,用于接收服务端通知
 - **健康检查**: `GET /healthz` — 服务健康状态
 
 ### 客户端连接示例
@@ -12,9 +11,9 @@
 ```python
 # Python (mcp 包)
 from mcp import Client
-from mcp.client.transport import SSETransport
+from mcp.client.streamable_http import StreamableHttpTransport
 
-transport = SSETransport("http://127.0.0.1:50052")
+transport = StreamableHttpTransport("http://127.0.0.1:50052/mcp")
 client = Client(transport)
 await client.initialize()
 
@@ -218,7 +217,7 @@ data = await client.read_resource("topology://current")
 
 ### topology://anomalies
 
-近期异常事件（通过 SSE notification 流式推送）。
+近期异常事件（通过 Streamable HTTP GET 长轮询流推送）。
 
 ```
 通知频道: notifications/events/anomaly
@@ -239,7 +238,7 @@ data = await client.read_resource("topology://current")
 
 ## 通知
 
-MCP Server 通过 SSE 向所有连接的客户端广播异常事件：
+MCP Server 通过 Streamable HTTP 的 GET 长轮询流向所有连接的客户端广播异常事件：
 
 ```json
 {
@@ -275,10 +274,10 @@ MCP Server 通过 SSE 向所有连接的客户端广播异常事件：
 # 完整的工作流示例
 import asyncio
 from mcp import Client
-from mcp.client.transport import SSETransport
+from mcp.client.streamable_http import StreamableHttpTransport
 
 async def diagnose_anomaly():
-    transport = SSETransport("http://localhost:50052")
+    transport = StreamableHttpTransport("http://localhost:50052/mcp")
     client = Client(transport)
 
     # 1. 获取拓扑

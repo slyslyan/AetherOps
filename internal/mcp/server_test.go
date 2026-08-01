@@ -1,6 +1,11 @@
 package mcp
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"ebpf-autoheal/internal/graph"
@@ -63,4 +68,42 @@ func TestStartAndShutdown(t *testing.T) {
 	}
 	// Should not block or panic
 	s.Shutdown(nil)
+}
+
+func TestStreamableEndpointInitialize(t *testing.T) {
+	s := NewServer(":0", nil, nil, nil, Config{})
+	ts := httptest.NewServer(s.streamable)
+	defer ts.Close()
+
+	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`
+	resp, err := http.Post(ts.URL+"/mcp", "application/json", bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("POST /mcp failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var r struct {
+		JSONRPC string `json:"jsonrpc"`
+		Result  struct {
+			ServerInfo struct {
+				Name string `json:"name"`
+			} `json:"serverInfo"`
+		} `json:"result"`
+		Error *struct{} `json:"error"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if r.JSONRPC != "2.0" {
+		t.Errorf("expected jsonrpc 2.0, got %q", r.JSONRPC)
+	}
+	if r.Error != nil {
+		t.Errorf("expected no error in initialize response, got %v", r.Error)
+	}
+	if !strings.EqualFold(r.Result.ServerInfo.Name, "AetherOps") {
+		t.Errorf("expected serverInfo.name AetherOps, got %q", r.Result.ServerInfo.Name)
+	}
 }

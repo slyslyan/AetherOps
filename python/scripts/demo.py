@@ -306,7 +306,7 @@ def main():
     Dynamic routing, low-confidence re-analysis, modular experts
 
   {BOLD}✓ MCP protocol (not gRPC){RESET}
-    JSON-RPC 2.0 over HTTP SSE, industry standard, K3s-friendly
+    JSON-RPC 2.0 over Streamable HTTP, industry standard, K3s-friendly
 
   {BOLD}✓ Blast Radius awareness{RESET}
     Every action is risk-evaluated before execution (LOW auto / MEDIUM TEE / HIGH pending)
